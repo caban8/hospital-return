@@ -1,0 +1,138 @@
+---
+title: "Theming with bslib and thematic"
+output: 
+  html_document:
+    code_folding: show
+    theme:
+      bg: "#3D3B40"
+      fg: "#525CEB"
+      primary: "#BFCFE7"
+      secondary: "#F8EDFF"
+      base_font:
+        google: Prompt
+      heading_font:
+        google: Proza Libre
+---
+
+```{r setup, include=FALSE}
+if (requireNamespace("thematic")) 
+  thematic::thematic_rmd(font = "auto")
+
+if (!require(pacman)) {install.packages("pacman")}
+
+pacman::p_load(rstatix, tidyverse)
+
+
+# Import data
+healthcare <- read_csv("Hospitals_Train.csv")
+
+
+```
+
+
+
+# Introduction 
+
+This is my attempt at finding the best tree model for the healthcare prediction data that was analyzed by [`ALIA107`](https://www.kaggle.com/code/bvc5283/healthcare-prediction/notebook) on kaggle. 
+
+I will more or less try to reproduce the same effects as the user above, but refining the code, report language, and overall presentation of tables and figures as to make it more appealing to a general user.
+
+# Infrastructure
+
+Below I create a set of vectors that will serve as basic parameters mostly for producing tables and plots.
+Further, here I will set up all self-created functions.
+All of this helps with making the code shorter and cleaner.
+
+## Plots
+
+
+### Color Palette
+
+```{r}
+
+#3D3B40
+#525CEB
+#BFCFE7
+#F8EDFF
+
+colors <- c(
+  "#FF9843",
+  "#FFDD95",
+  "#86A7FC",
+  "#3468C0"
+)
+
+
+
+
+
+```
+
+
+
+## Tables
+
+
+```{r}
+
+own_table <- function(x) {
+  x %>% 
+    knitr::kable()
+}
+
+```
+
+
+
+
+# Data cleaning
+
+Let's take a look at the basic structure of the dataset.
+
+```{r}
+
+glimpse(healthcare)
+
+
+```
+
+The `read_csv` function, as opposed to `read.csv`, automatically ascribes `NA` to empty values.
+
+## Missing data
+
+
+```{r}
+
+healthcare %>% 
+  summarise(
+    across(everything(), list(
+      number = ~sum(is.na(.)), 
+      percent = ~mean(is.na(.))
+      )
+    )
+  ) %>% 
+  pivot_longer(
+    everything(), 
+    names_pattern = "(.*)_(.*)",
+    names_to = c("Variable", "Statistic"),
+    values_to = "value"
+    ) %>% 
+  pivot_wider(names_from = Statistic, values_from = value) %>% 
+  arrange(desc(percent)) %>% 
+  filter(number != 0) -> missing
+
+missing2 <- missing %>% 
+  filter(percent > 0.10)
+
+missing %>% 
+  own_table
+
+
+
+```
+
+There are `r nrow(missing)` variables with missing data. However, only `r nrow(missing2)` have missing values at a level of more than 10%.
+
+
+
+
