@@ -345,4 +345,4 @@ healthcare2 %>%
 ```
 
 
-
+## Exploration of quantitative variables
