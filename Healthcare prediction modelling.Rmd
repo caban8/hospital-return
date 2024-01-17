@@ -326,76 +326,7 @@ healthcare2 %>%
 
 # EDA
 
-  kl+
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  +66
+
 ## Analysis of qualitative variables
 
 ```{r}
@@ -405,7 +336,7 @@ healthcare2 %>%
   pivot_longer(everything()) %>% 
   nest(.by = name) %>% 
   mutate(freq = map(data, freq_table, value)) %>% 
-  unnest(.by = freq) 
+  unnest(.by = freq) %>% 
   ggplot(aes(value, prop)) +
   geom_bar(stat = "identity") +
   facet_wrap(~name, scales = "free", ncol = 2 )
