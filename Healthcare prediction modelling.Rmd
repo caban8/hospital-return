@@ -2,12 +2,13 @@
 title: "Theming with bslib and thematic"
 output: 
   html_document:
-    code_folding: show
+    code_folding: hide
+    toc: true
     theme:
-      bg: "#3D3B40"
-      fg: "#525CEB"
-      primary: "#BFCFE7"
-      secondary: "#F8EDFF"
+      bg: "#F9F7F7"
+      fg: "#112D4E"
+      primary: "#DBE2EF"
+      secondary: "#3F72AF"
       base_font:
         google: Prompt
       heading_font:
@@ -20,7 +21,7 @@ if (requireNamespace("thematic"))
 
 if (!require(pacman)) {install.packages("pacman")}
 
-pacman::p_load(rstatix, tidyverse)
+pacman::p_load(plyr, kableExtra, rstatix, rstatix, tidyverse)
 
 
 # Import data
@@ -35,7 +36,13 @@ healthcare <- read_csv("Hospitals_Train.csv")
 
 This is my attempt at finding the best tree model for the healthcare prediction data that was analyzed by [`ALIA107`](https://www.kaggle.com/code/bvc5283/healthcare-prediction/notebook) on kaggle. 
 
-I will more or less try to reproduce the same effects as the user above, but refining the code, report language, and overall presentation of tables and figures as to make it more appealing to a general user.
+I will more or less try to reproduce the same effects as the user above, but refining the code, reporting language, and overall presentation of tables and figures as to make it more appealing to a general user.
+I will also expand the analysis when seen appropriate.
+
+The goal is to predict whether a discharged patient will return to the hospital within 30 days.
+
+
+
 
 # Infrastructure
 
@@ -49,11 +56,11 @@ All of this helps with making the code shorter and cleaner.
 ### Color Palette
 
 ```{r}
-
-#3D3B40
-#525CEB
-#BFCFE7
-#F8EDFF
+# https://colorhunt.co/palette/f9f7f7dbe2ef3f72af112d4e
+#F9F7F7
+#112D4E
+#DBE2EF
+#3F72AF
 
 colors <- c(
   "#FF9843",
@@ -77,7 +84,8 @@ colors <- c(
 
 own_table <- function(x) {
   x %>% 
-    knitr::kable()
+    kable() %>% 
+    kable_minimal(lightable_options = "hover")
 }
 
 ```
@@ -98,16 +106,35 @@ glimpse(healthcare)
 
 The `read_csv` function, as opposed to `read.csv`, automatically ascribes `NA` to empty values.
 
+
+```{r}
+
+dimen <- dim(healthcare)
+dimen
+
+```
+The raw dataset contains `r dimen[1]` obsevations with `r dimen[2]` variables.
+
+In order to ease coding the names of all variables are turned to lowercase.
+
+```{r}
+
+healthcare <- healthcare %>% 
+  rename_with(~str_to_lower(.), everything())
+
+```
+
+
+
 ## Missing data
 
 
 ```{r}
-
 healthcare %>% 
   summarise(
     across(everything(), list(
       number = ~sum(is.na(.)), 
-      percent = ~mean(is.na(.))
+      percent = ~mean(is.na(.)) 
       )
     )
   ) %>% 
@@ -118,21 +145,273 @@ healthcare %>%
     values_to = "value"
     ) %>% 
   pivot_wider(names_from = Statistic, values_from = value) %>% 
+  mutate(percent = round(percent * 100, 1)) %>% 
   arrange(desc(percent)) %>% 
   filter(number != 0) -> missing
 
 missing2 <- missing %>% 
-  filter(percent > 0.10)
+  filter(percent > 10)
 
 missing %>% 
   own_table
+```
+
+
+There are `r nrow(missing)` variables with missing data. However, only `r nrow(missing2)` have missing values at a level of more than 10%.
+
+We can check, if there is any pattern in missing values in relation to to the `return` (DV) variable.
+
+
+```{r}
+
+missing_filt <- missing %>% 
+  pull(Variable)
+
+
+healthcare %>% 
+  select(return, missing_filt) %>% 
+  mutate(across(-return, ~if_else(is.na(.), "Missing", "Non-missing"))) %>% 
+  pivot_longer(-return) %>% 
+  nest(.by = name) %>% 
+  mutate(
+    freq_table = map(data, freq_table, value, return)
+  ) %>% 
+  select(-data) %>% 
+  unnest() %>% 
+  ggplot(aes(value, prop, fill = return)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~name)
+
+
+```
+
+
+Differences in proportions of those who returned were observed in all variables that had missing values.
+Including them could improve the model.
+Therefore, in the case of character variables, `NA` will be coded as *"Missing"*.
+
+
+
+```{r}
+# Adding missing as a string value
+healthcare <- healthcare %>% 
+  mutate(
+    across(where(is.character), ~replace_na(., "Missing")) 
+  ) %>% 
+  select(-consult_in_ed) # Exclude the numerical variable with mostly missing values
+```
+
+
+
+
+## Qualitative values
+
+### Unique values
+
+Checking what character vectors represent by inspecting unique values.
+
+```{r}
+
+healthcare %>% 
+  select(where(is.character)) %>% 
+  map(unique) %>% 
+  keep(~length(.) < 50) %>% 
+  {
+    by_length <- lengths(.) %>% 
+      order()
+    .[by_length]
+    }
+
+
+```
+Variables like Race or Ethnicity have two values that essentially mean the same thing - *"Declined to answer"* and *Unknown*". Both will be transformed to missing values.
+
+The **DC** stands for discharge, while **ED** for emergency department. Both consist of a substantial number of unique values. Using them in at least some of the models (e.g. regressions) would be highly penalized, because of a large number of predictors. Further, if we strive for higher interpretability, a simpler model is preferred. 
+Therefore, we will simplify those variables to a smaller number of levels. This will also include `race` and `financial_class`, as they also have above 10 levels.
+
+```{r}
+healthcare %>% 
+  select(financial_class, ed_result, dc_result, race) %>% 
+  pivot_longer(everything()) %>% 
+  nest(.by = name) %>% 
+  mutate(freq = map(data, freq_table, value)) %>% 
+  select(-data) %>% 
+  unnest() %>% 
+  arrange(name, desc(prop)) %>% 
+  filter(prop > 1) %>% 
+  own_table()
+
+```
+
+
+Based on the proportions, `dc_result` will be recoded to a variable with only two values, as the majority of the patients belonged to one category. The `ed_result` and `financial_class` variables have a more varied distribution and will be lumped up to the category with 5% of observations. In the latter case a more theoretically-oriented approach could be implemented, but it would require a higher domain-knowledge. `race` will be divided to three categories:
+*"Black or African American"*, 
+*"White"* and 
+*"Other"*.
+
+
+```{r}
+# Check if there are other, similarly formulated values as "home or self care"
+healthcare$dc_result %>% 
+  unique() %>% 
+  str_subset("[hH]ome|[sS]elf")
+  
+
+```
+"Home Health Care Svc" sounds similar to "Home or Self Care". However, as the distinction is not obvious, it will be left as it is.
+
+
+
+
+```{r}
+healthcare <- healthcare %>% 
+  mutate(
+    across(c(ed_result, financial_class), ~fct_lump_prop(., 0.05)),
+    race = fct_lump(race, 2),
+    dc_result = fct_lump(dc_result, 1)
+  ) 
+  
+
+
+```
+
+
+
+
+
+Variable `acuity_arr` has a suspected value *"5 Purple"*, as it does not make sense in the context of the remaining values.
+
+```{r}
+healthcare %>% 
+  count(acuity_arr) %>% 
+  own_table()
+
+
+```
+
+As there is only one observation with such value, it can be safely ignored as `NA`.
+
+```{r}
+
+
+# Transforming remaining character vectors to factors
+healthcare2 <- healthcare %>% 
+  mutate(
+    acuity_arr = mapvalues(acuity_arr, "5 Purple", "Missing" ),
+    acuity_arr = factor(acuity_arr) %>% fct_relabel(~str_replace(., "[0-9]-", "")),
+    across(c(race, ethnicity), ~plyr::mapvalues(
+      .,  
+      from = c( "Declined to Answer","Unknown"),
+      to = c("Missing", "Missing")
+      )
+    ),
+    across(
+      c(hospital, gender, race, ethnicity, diagnosis, return, financial_class, admit_result),
+      ~as.factor(.)
+      ),
+    across(c(risk, severity), ~factor(., levels = c("Minor","Moderate", "Major", "Extreme", "Missing"))),
+    across(
+      c(race, financial_class, admit_result, ethnicity), 
+      ~fct_relevel(., "Missing", "Other", after = Inf)) # Move "other" to the end
+  ) 
+
+healthcare2 %>% 
+  select(where(is.factor)) %>% 
+  map(levels)
+  
 
 
 
 ```
 
-There are `r nrow(missing)` variables with missing data. However, only `r nrow(missing2)` have missing values at a level of more than 10%.
+# EDA
 
+  kl+
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  +66
+## Analysis of qualitative variables
+
+```{r}
+
+healthcare2 %>% 
+  select(return, where(is.factor)) %>% 
+  pivot_longer(everything()) %>% 
+  nest(.by = name) %>% 
+  mutate(freq = map(data, freq_table, value)) %>% 
+  unnest(.by = freq) 
+  ggplot(aes(value, prop)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~name, scales = "free", ncol = 2 )
+
+
+```
 
 
 
