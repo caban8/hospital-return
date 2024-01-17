@@ -198,7 +198,7 @@ healthcare <- healthcare %>%
   mutate(
     across(where(is.character), ~replace_na(., "Missing")) 
   ) %>% 
-  select(-consult_in_ed) # Exclude the numerical variable with mostly missing values
+  select(-c(consult_in_ed, index)) # Exclude the numerical variable with mostly missing values and index
 ```
 
 
@@ -326,23 +326,87 @@ healthcare2 %>%
 
 # EDA
 
+## Return - the outcome variable
+
+
+```{r}
+healthcare2 %>% 
+  freq_table(return) %>% 
+  own_table()
+
+```
+
+For every three patients who did not return, there was one who did.
+
 
 ## Analysis of qualitative variables
 
-```{r}
+```{r fig.asp=1.5}
 
+# Pivot data and create a faceted bar plot
 healthcare2 %>% 
   select(return, where(is.factor)) %>% 
   pivot_longer(everything()) %>% 
   nest(.by = name) %>% 
   mutate(freq = map(data, freq_table, value)) %>% 
   unnest(.by = freq) %>% 
+  mutate(name = factor(name) %>% fct_relevel("return", after = Inf)) %>% # Show outcome variable as last
   ggplot(aes(value, prop)) +
   geom_bar(stat = "identity") +
-  facet_wrap(~name, scales = "free", ncol = 2 )
+  facet_wrap(~name, scales = "free", ncol = 2) +
+  coord_flip()
+
+
+```
+Except what was already learned while inspecting variables with missing values, we can see an equal distribution of gender and the hospital from which the data comes. Interestingly, there is a reversed distribution of diagnosis to return. Theoretically, it would make sense for the diagnosis to be a strong predictor of return, as knowing the nature of the disease would allow for proper and quicker treatment followed with a resolution. 
+
+
+
+```{r fig.asp=1.5}
+
+# Pivot data and create a faceted bar plot of all string variables against return
+healthcare2 %>% 
+  select(return, where(is.factor)) %>% 
+  mutate( return = fct_rev(return)) %>% 
+  pivot_longer(-return) %>% 
+  nest(.by = name) %>% 
+  mutate(
+    freq = map(data, freq_table, value, return)
+    ) %>% 
+  unnest(.by = freq) %>% 
+  ggplot(aes(value, prop, fill = return)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~name, scales = "free", ncol = 2) +
+  coord_flip()
+
+
+```
+Diagnosis, or its lack to be more specific, indeed seems to be a predictor of return. However, the relationship is not as strong as anticipated. 
+
+Regardless of the hospital, the proportion of those who returned within 30 days to the hospital was the same. 
+
+Interestingly, in almost all variables that had `NA`, missing value was associated with a higher chance of return.
+
+
+
+## Exploration of quantitative variables
+
+
+```{r}
+
+healthcare2 %>% 
+  select(where(is.numeric)) %>% 
+  pivot_longer(everything()) %>% 
+  ggplot(aes(value)) +
+  geom_histogram() +
+  facet_wrap(~name, scales = "free")
+  
 
 
 ```
 
 
-## Exploration of quantitative variables
+
+Co zrobić z uporządkowaniem zmiennych numerycznych, które tak naprawdę są jakościowe?
+
+Co zrobić ze zmiennymi czasowymi?
