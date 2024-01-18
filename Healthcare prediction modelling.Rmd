@@ -16,9 +16,6 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-if (requireNamespace("thematic")) 
-  thematic::thematic_rmd(font = "auto")
-
 if (!require(pacman)) {install.packages("pacman")}
 
 pacman::p_load(plyr, kableExtra, rstatix, rstatix, tidyverse)
@@ -35,6 +32,7 @@ healthcare <- read_csv("Hospitals_Train.csv")
 # Introduction 
 
 This is my attempt at finding the best tree model for the healthcare prediction data that was analyzed by [`ALIA107`](https://www.kaggle.com/code/bvc5283/healthcare-prediction/notebook) on kaggle. 
+Data was downloaded from here: https://github.com/HannahHan3/758T_PredictiveModeling
 
 I will more or less try to reproduce the same effects as the user above, but refining the code, reporting language, and overall presentation of tables and figures as to make it more appealing to a general user.
 I will also expand the analysis when seen appropriate.
@@ -69,6 +67,8 @@ colors <- c(
   "#3468C0"
 )
 
+
+thematic::thematic_rmd(font = "auto", qualitative = colors)
 
 
 
@@ -258,7 +258,7 @@ healthcare$dc_result %>%
   
 
 ```
-"Home Health Care Svc" sounds similar to "Home or Self Care". However, as the distinction is not obvious, it will be left as it is.
+"Home Health Care Svc" sounds similar to "Home or Self Care". However, as the distinction is not obvious and I lack proper theoretical background, it will be left as it is.
 
 
 
@@ -274,7 +274,6 @@ healthcare <- healthcare %>%
 
 
 ```
-
 
 
 
@@ -315,14 +314,45 @@ healthcare2 <- healthcare %>%
       ~fct_relevel(., "Missing", "Other", after = Inf)) # Move "other" to the end
   ) 
 
-healthcare2 %>% 
-  select(where(is.factor)) %>% 
-  map(levels)
-  
+
 
 
 
 ```
+
+## Numerical variables
+
+
+
+```{r}
+# Inspect first 10 unique elements 
+healthcare2 %>% 
+  select(where(is.numeric)) %>% 
+  map(unique) %>% 
+  map(function(x) {x[1:10] %>% keep(!is.na(.))}) 
+
+```
+
+Three variables are binary which suggests that they are of *occured* / *not occured* nature and as such are categorical. They will be transformed to factor variables.
+
+Six of the numerical variables are date / datetime objects.
+They could be treated as either categorical or continuous variables, depending on the theoretical and methodological backgrounds. In this case, as our outcome variable is binary and there is no apparent linear or continuity aspect to it in terms of passing time, it is more methodologically sound to treat them as factors, whereby the model would assess the effect of each time-point separately. However, they will be first explored.
+
+
+```{r}
+# Transforming selected numerical columns to factors
+healthcare2 <- healthcare2 %>% 
+  mutate(
+    across(c(same_day, consult_order, consult_charge), ~as.factor(.)),
+    across(matches("weekday|month|hour"), ~as.factor(.))
+    )
+
+
+
+```
+
+
+
 
 # EDA
 
@@ -366,7 +396,7 @@ Except what was already learned while inspecting variables with missing values, 
 
 # Pivot data and create a faceted bar plot of all string variables against return
 healthcare2 %>% 
-  select(return, where(is.factor)) %>% 
+  select(return, where(is.factor), -matches("hour|month|weekday")) %>% 
   mutate( return = fct_rev(return)) %>% 
   pivot_longer(-return) %>% 
   nest(.by = name) %>% 
@@ -391,6 +421,7 @@ Interestingly, in almost all variables that had `NA`, missing value was associat
 
 ## Exploration of quantitative variables
 
+### Distribution of age and diagnosis details
 
 ```{r}
 
@@ -404,6 +435,71 @@ healthcare2 %>%
 
 
 ```
+
+### Distribution of date / time variables
+
+```{r}
+
+healthcare2 %>% 
+  select(matches("hour|month|weekday")) %>% 
+  pivot_longer(everything()) %>% 
+  count(name, value) %>% 
+  mutate(value = factor(value, levels = 0:23)) %>% # Set 0 as the starting point
+  ggplot(aes(value, n)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~name, scales = "free", ncol = 2) 
+  
+
+```
+The arrivals and departures were most frequent during late afteroon and late evening hours and least frequent during morning.
+
+Interestingly, their corresponding distributions look almost identical.
+
+```{r}
+# Identify different values between hour variables
+setdiff(healthcare2$hour_arr, healthcare2$hour_dep)
+
+
+```
+Indeed, they are identical. This could mean that the time between their arrival and, following discharge, departure was always shorter than one hour. However, a more plausible explanation is that there is a methodological error in data preparation, as one would expect at several instances of patients who arrived at the end of a given hour and left at the onset of the next hour.
+
+Regardless of the true reason, a duplicate should be removed to avoid multicollinearity as well as a general methodological misunderstanding. This also includes the month and weekday variables.
+
+
+```{r}
+healthcare3 <- healthcare2 %>% 
+  select(-ends_with("dep")) %>% 
+  rename_with(~str_replace(., "_arr", ""), matches("month|hour|weekday"))
+
+```
+
+
+
+
+```{r}
+
+
+
+healthcare3 %>% 
+  select(weekday, hour, month, return) %>% 
+  pivot_longer(-return) %>% 
+  nest(.by = name) %>% 
+  mutate(freq = map(data, freq_table, value, return)) %>% 
+  unnest(.by = freq) %>% 
+  mutate(value = factor(value, levels = 0:24)) %>%  # Set 0 as the starting point for the hour variable
+  filter(return == "Yes")  %>% 
+  ggplot(aes(value, prop, group = 1)) +
+  geom_bar(stat = "identity") +
+  geom_line(size = 1, color = colors[2]) +
+  facet_wrap(~name, scales = "free", ncol = 2)
+    
+
+
+```
+
+In the case of hour there is a small 
+
+
 
 
 
