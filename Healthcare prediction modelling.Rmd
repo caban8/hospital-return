@@ -191,7 +191,18 @@ healthcare %>%
 
 Differences in the proportions of those who returned were observed across variables that had missing values. Therefore, including information about missing values could benefit the model. Consequently, for character variables, `NA` will be coded as *'Missing'*.
 
-The numerical variable `consult_in_ed` will be removed from the analysis, as it is methodologically not possible to include a character value as part of a continuous variable.
+As `consult_in_ed` is a numerical variable, it is methodologically not possible to include a character value *'Missing'*. However, let's inspect its unique values.
+
+```{r}
+
+unique(healthcare$consult_in_ed)
+  
+
+```
+This probably means that 1 represents the occurence of consultation, while `NA` represents lack of such occurence.
+However, having no such knowledge, it is safer to code `NA` as *'Missing'*.
+
+
 
 
 
@@ -199,9 +210,11 @@ The numerical variable `consult_in_ed` will be removed from the analysis, as it 
 # Adding missing as a string value
 healthcare <- healthcare %>% 
   mutate(
-    across(where(is.character), ~replace_na(., "Missing")) 
-  ) %>% 
-  select(-c(consult_in_ed, index)) # Exclude the numerical variable with mostly missing values and index
+    across(where(is.character), ~replace_na(., "Missing")),
+    consult_in_ed = mapvalues(consult_in_ed, c(1, NA), c("Consulted", "Missing")),
+    consult_in_ed = factor(consult_in_ed)
+  ) 
+  
 ```
 
 
@@ -440,7 +453,7 @@ For every three patients who did not return, there was one who did.
 
 # Pivot data and create a faceted bar plot
 healthcare2 %>% 
-  select(return, where(is.factor), matches("hour|month|weekday")) %>% 
+  select(return, where(is.factor), -matches("hour|month|weekday")) %>% 
   pivot_longer(everything()) %>% 
   nest(.by = name) %>% 
   mutate(freq = map(data, freq_table, value)) %>% 
@@ -448,7 +461,7 @@ healthcare2 %>%
   mutate(name = factor(name) %>% fct_relevel("return", after = Inf)) %>% # Show outcome variable as last
   ggplot(aes(value, prop)) +
   geom_bar(stat = "identity") +
-  facet_wrap(~name, scales = "free", ncol = 2) +
+  facet_wrap(~name, scales = "free", ncol = 3) +
   coord_flip()
 
 
@@ -599,6 +612,33 @@ setdiff(healthcare2$hour_arr, healthcare2$hour_dep)
 
 ```
 Indeed, they are identical. This could mean that the time between their arrival and, following discharge, departure was always shorter than one hour. However, a more plausible explanation is that there is a methodological error in data preparation, as one would expect at several instances of patients who arrived at the end of a given hour and left at the onset of the next hour.
+
+
+WHAT TO DO ABOUT THE FEW NOT DUPLICATED CASES BELOW?
+LOOKS LIKE THERE IS SOME INCONSISTENCY IN DATA
+
+```{r}
+
+healthcare2 %>% 
+  filter(same_day == 0) %>% 
+  select(matches("month|weekday|hour")) %>% 
+  pivot_longer(
+    everything(), 
+    names_pattern = "(.+)_(.+)", 
+    names_to = c("date", "type"), 
+    values_to = "value"
+    ) %>% 
+  group_by(type) %>% 
+  mutate(id = row_number()) %>% 
+  pivot_wider(names_from = "type", values_from = "value") %>% 
+  mutate(
+    duplicated = arr == dep
+  ) %>% 
+  filter(!duplicated)
+
+
+```
+
 
 Regardless of the true reason, a duplicate should be removed to avoid multicollinearity. This also includes the month and weekday variables, as it follows that they too have to be duplicated.
 
