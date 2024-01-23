@@ -4,6 +4,9 @@ output:
   html_document:
     code_folding: hide
     toc: true
+    toc_float: 
+      collapsed: false
+      smooth_scroll: true
     theme:
       bg: "#F9F7F7"
       fg: "#112D4E"
@@ -113,9 +116,9 @@ dimen <- dim(healthcare)
 dimen
 
 ```
-The raw dataset contains `r dimen[1]` obsevations with `r dimen[2]` variables.
+The raw dataset contains `r dimen[1]` observations with `r dimen[2]` variables.
 
-In order to ease coding the names of all variables are turned to lowercase.
+In order to ease coding, the names of all variables are converted to lowercase.
 
 ```{r}
 
@@ -157,7 +160,7 @@ missing %>%
 ```
 
 
-There are `r nrow(missing)` variables with missing data. However, only `r nrow(missing2)` have missing values at a level of more than 10%.
+There are `r nrow(missing)` variables with missing data. However, only `r nrow(missing2)` have a noticeably high number of missing values, while the remaining stay below a level of 10%.
 
 We can check, if there is any pattern in missing values in relation to to the `return` (DV) variable.
 
@@ -169,7 +172,7 @@ missing_filt <- missing %>%
 
 
 healthcare %>% 
-  select(return, missing_filt) %>% 
+  select(return, all_of(missing_filt)) %>% 
   mutate(across(-return, ~if_else(is.na(.), "Missing", "Non-missing"))) %>% 
   pivot_longer(-return) %>% 
   nest(.by = name) %>% 
@@ -186,9 +189,9 @@ healthcare %>%
 ```
 
 
-Differences in proportions of those who returned were observed in all variables that had missing values.
-Including them could improve the model.
-Therefore, in the case of character variables, `NA` will be coded as *"Missing"*.
+Differences in the proportions of those who returned were observed across variables that had missing values. Therefore, including information about missing values could benefit the model. Consequently, for character variables, `NA` will be coded as *'Missing'*.
+
+The numerical variable `consult_in_ed` will be removed from the analysis, as it is methodologically not possible to include a character value as part of a continuous variable.
 
 
 
@@ -204,7 +207,66 @@ healthcare <- healthcare %>%
 
 
 
-## Qualitative values
+## Categorical variables
+
+
+### Large qualitative variables
+
+
+```{r}
+
+qualitatives <- healthcare %>% 
+  select(where(is.character)) %>% 
+  map(unique) %>% 
+  keep(~length(.) > 50) %>% 
+  map(length) %>%  
+  enframe() %>% 
+  unnest()
+  
+qualitatives %>% 
+  own_table()
+  
+
+```
+
+One character variable, namely, `r qualitatives$name[1]` has `r qualitatives$value[1]` unique values.
+However, based on the name, this seems to be a numerical variable.
+
+
+```{r}
+set.seed(1)
+healthcare %>% 
+  slice_sample(n = 20) %>% 
+  pull(charges)
+
+
+```
+
+
+```{r}
+healthcare %>% 
+  mutate(
+    charges2 = as.double(charges)
+  ) %>% 
+  filter(is.na(charges2)) %>% 
+  select(charges, charges2) %>% 
+  own_table()
+```
+
+A small portion of the observations for that variable has uninterpretable values. Nothing to worry about
+
+
+```{r}
+# Apply modification of the charge variable to the dataset
+healthcare <- healthcare %>% 
+  mutate(
+    charges = as.double(charges)
+  ) %>% 
+  drop_na(charges)
+
+```
+
+
 
 ### Unique values
 
@@ -215,7 +277,7 @@ Checking what character vectors represent by inspecting unique values.
 healthcare %>% 
   select(where(is.character)) %>% 
   map(unique) %>% 
-  keep(~length(.) < 50) %>% 
+  keep(~length(.) < 50) %>% # Exclude potential qualitative variables 
   {
     by_length <- lengths(.) %>% 
       order()
@@ -320,12 +382,14 @@ healthcare2 <- healthcare %>%
 
 ```
 
+
+
 ## Numerical variables
 
 
 
 ```{r}
-# Inspect first 10 unique elements 
+# Inspect the 10 first unique elements 
 healthcare2 %>% 
   select(where(is.numeric)) %>% 
   map(unique) %>% 
@@ -336,7 +400,8 @@ healthcare2 %>%
 Three variables are binary which suggests that they are of *occured* / *not occured* nature and as such are categorical. They will be transformed to factor variables.
 
 Six of the numerical variables are date / datetime objects.
-They could be treated as either categorical or continuous variables, depending on the theoretical and methodological backgrounds. In this case, as our outcome variable is binary and there is no apparent linear or continuity aspect to it in terms of passing time, it is more methodologically sound to treat them as factors, whereby the model would assess the effect of each time-point separately. However, they will be first explored.
+They could be treated as either categorical or continuous variables, depending on the theoretical and methodological backgrounds. In this case, as our outcome variable is binary and there is no apparent linear or continuity aspect to it in terms of passing time, it is more methodologically sound to treat them as factors, whereby the model would assess the effect of each time-point separately. 
+This decision will be further explored as part of EDA.
 
 
 ```{r}
@@ -369,13 +434,13 @@ healthcare2 %>%
 For every three patients who did not return, there was one who did.
 
 
-## Analysis of qualitative variables
+## Exploration of the categorical variables
 
 ```{r fig.asp=1.5}
 
 # Pivot data and create a faceted bar plot
 healthcare2 %>% 
-  select(return, where(is.factor)) %>% 
+  select(return, where(is.factor), matches("hour|month|weekday")) %>% 
   pivot_longer(everything()) %>% 
   nest(.by = name) %>% 
   mutate(freq = map(data, freq_table, value)) %>% 
@@ -421,7 +486,33 @@ Interestingly, in almost all variables that had `NA`, missing value was associat
 
 ## Exploration of quantitative variables
 
-### Distribution of age and diagnosis details
+### Descriptive statistics and distribution of age, charges, and diagnosis details
+
+
+```{r}
+
+descriptives <- healthcare2 %>% 
+  get_summary_stats(type = "common") 
+
+# Extract stats for an automated describing 
+descriptives2 <- descriptives %>% 
+  nest(.by = variable) %>% 
+  mutate(data = map(data, unlist)) %>% 
+  pull(data) %>% 
+  set_names(descriptives$variable)
+
+descriptives %>% 
+  own_table()
+
+```
+
+
+People were between `r descriptives2$age[2]` and `r descriptives2$age[3]` years old with a mean of `r descriptives2$age[6]`.
+
+Charges encompassed from `r descriptives2$charges[2]` to `r descriptives2$charges[3]`. As the mean (*M* = `r descriptives2$charges[6]`) was substantially bigger compared to the median `r descriptives2$charges[4]` this suggests a large number of extreme values and that the distribution was rightly skewed.
+
+
+
 
 ```{r}
 
@@ -430,13 +521,58 @@ healthcare2 %>%
   pivot_longer(everything()) %>% 
   ggplot(aes(value)) +
   geom_histogram() +
-  facet_wrap(~name, scales = "free")
+  facet_wrap(~name, scales = "free") 
   
 
 
 ```
 
-### Distribution of date / time variables
+Most of the patients were either in their early adulthood or middle-age.
+
+
+
+
+```{r}
+
+charges_sep <- healthcare2 %>% 
+  mutate(charges_z = scale(charges)) %>% 
+  {
+    charges_cleaner <- filter(., abs(charges_z) <= 2)
+    charges_extreme <- filter(., abs(charges_z) > 2)
+    list(charges_extreme, charges_cleaner) %>% 
+      set_names(c("charges_cleaner", "charges_extreme"))
+  }
+
+
+charges_sep$charges_cleaner %>% 
+  ggplot(aes(charges)) +
+  geom_histogram()
+
+charges_sep$charges_extreme %>% 
+  ggplot(aes(charges)) +
+  geom_histogram()
+
+```
+
+
+
+
+```{r}
+
+healthcare2 %>% 
+  select(where(is.numeric), return) %>% 
+  pivot_longer(-return) %>% 
+  ggplot(aes(value, color = return)) +
+  geom_density() +
+  facet_wrap(~name, scales = "free")
+
+```
+Being between 50 and 60 years old was associated with a higher chance of return.
+The relationship is not linear.
+
+
+
+## Exploration of the date / time variables
 
 ```{r}
 
@@ -444,16 +580,17 @@ healthcare2 %>%
   select(matches("hour|month|weekday")) %>% 
   pivot_longer(everything()) %>% 
   count(name, value) %>% 
-  mutate(value = factor(value, levels = 0:23)) %>% # Set 0 as the starting point
+  mutate(value = factor(value, levels = 0:23)) %>% # Set 0 as the starting point (hour variable)
   ggplot(aes(value, n)) +
   geom_bar(stat = "identity") +
   facet_wrap(~name, scales = "free", ncol = 2) 
   
 
 ```
-The arrivals and departures were most frequent during late afteroon and late evening hours and least frequent during morning.
+The arrivals and departures were most frequent during late afteroon and late evening hours and least frequent during morning. 
+The months with somewhat higher departures and arrivals were January (possibly associated with the New Year's Eve) and March to July. There is no data for October.
 
-Interestingly, their corresponding distributions look almost identical.
+Interestingly, the corresponding distributions of arrivals and departures in pair of variables look almost identical.
 
 ```{r}
 # Identify different values between hour variables
@@ -463,7 +600,7 @@ setdiff(healthcare2$hour_arr, healthcare2$hour_dep)
 ```
 Indeed, they are identical. This could mean that the time between their arrival and, following discharge, departure was always shorter than one hour. However, a more plausible explanation is that there is a methodological error in data preparation, as one would expect at several instances of patients who arrived at the end of a given hour and left at the onset of the next hour.
 
-Regardless of the true reason, a duplicate should be removed to avoid multicollinearity as well as a general methodological misunderstanding. This also includes the month and weekday variables.
+Regardless of the true reason, a duplicate should be removed to avoid multicollinearity. This also includes the month and weekday variables, as it follows that they too have to be duplicated.
 
 
 ```{r}
@@ -474,7 +611,7 @@ healthcare3 <- healthcare2 %>%
 ```
 
 
-
+Let's see what is the distribution of returns depending on the date-time points.
 
 ```{r}
 
@@ -490,19 +627,37 @@ healthcare3 %>%
   filter(return == "Yes")  %>% 
   ggplot(aes(value, prop, group = 1)) +
   geom_bar(stat = "identity") +
-  geom_line(size = 1, color = colors[2]) +
+  geom_line(color = colors[1], linewidth = 0.8) +
   facet_wrap(~name, scales = "free", ncol = 2)
     
 
 
 ```
 
-In the case of hour there is a small 
+The highest numbers of returns were observed from night to morning peaking in early-morning hours (between 5 and 7 a.m.). The relationship is, however, non-linear and as the daytime has a cyclic nature it's starting point is chosen arbitrarily. This, with previous considerations, reasons for operationalizing hour of the day as a categorical variable.
+
+The rates of returns were more or less the same throughout the year with the exception of September, which was associated with noticeably lower numbers of returns. During the week, Monday was associated with somewhat higher rate of returns compared to the rest of the week. 
+
+This speaks for reducing the number of levels such to group neighbouring levels with similar rates of returns. This will reduce the number of predictors in the final model.
+
+
+```{r}
+
+healthcare3 %>% 
+  mutate(
+    month = factor(month, labels = month.abb[-11]),
+    weekday = factor(weekday, labels = c(
+      "Mon",
+      "Tue",
+      "Wed",
+      "Thu",
+      "Fri",
+      "Sat",
+      "Sun"
+    ))
+  )
+
+```
 
 
 
-
-
-Co zrobić z uporządkowaniem zmiennych numerycznych, które tak naprawdę są jakościowe?
-
-Co zrobić ze zmiennymi czasowymi?
