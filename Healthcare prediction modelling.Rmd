@@ -64,10 +64,10 @@ All of this helps with making the code shorter and cleaner.
 #3F72AF
 
 colors <- c(
+  "#3468C0",
   "#FF9843",
   "#FFDD95",
-  "#86A7FC",
-  "#3468C0"
+  "#86A7FC"
 )
 
 
@@ -412,8 +412,8 @@ healthcare2 %>%
 
 Three variables are binary which suggests that they are of *occured* / *not occured* nature and as such are categorical. They will be transformed to factor variables.
 
-Six of the numerical variables are date / datetime objects.
-They could be treated as either categorical or continuous variables, depending on the theoretical and methodological backgrounds. In this case, as our outcome variable is binary and there is no apparent linear or continuity aspect to it in terms of passing time, it is more methodologically sound to treat them as factors, whereby the model would assess the effect of each time-point separately. 
+Six of the numerical variables are date / time objects.
+They could be treated as either categorical or continuous variables, depending on the theoretical and methodological backgrounds. In this case, as our outcome variable is binary and there is no apparent and theoretically grounder reason to expect a linear aspect to it in terms of passing time, it is more methodologically sound to treat the date / time variables as factors, whereby the model would assess the effect of each time-point separately. 
 This decision will be further explored as part of EDA.
 
 
@@ -453,7 +453,7 @@ For every three patients who did not return, there was one who did.
 
 # Pivot data and create a faceted bar plot
 healthcare2 %>% 
-  select(return, where(is.factor), -matches("hour|month|weekday")) %>% 
+  select(where(is.factor), -c(matches("hour|month|weekday"), return) ) %>% 
   pivot_longer(everything()) %>% 
   nest(.by = name) %>% 
   mutate(freq = map(data, freq_table, value)) %>% 
@@ -466,7 +466,8 @@ healthcare2 %>%
 
 
 ```
-Except what was already learned while inspecting variables with missing values, we can see an equal distribution of gender and the hospital from which the data comes. Interestingly, there is a reversed distribution of diagnosis to return. Theoretically, it would make sense for the diagnosis to be a strong predictor of return, as knowing the nature of the disease would allow for proper and quicker treatment followed with a resolution. 
+
+Except what was already learned while inspecting variables with missing values, we can see an equal distribution of gender and the hospital from which the data comes. Interestingly, there is a reversed distribution of diagnosis to return. Theoretically, it would make sense for the diagnosis to be a strong predictor of return, as knowing the nature of the disease would allow for proper and quicker treatment leading to a resolution. 
 
 
 
@@ -475,7 +476,6 @@ Except what was already learned while inspecting variables with missing values, 
 # Pivot data and create a faceted bar plot of all string variables against return
 healthcare2 %>% 
   select(return, where(is.factor), -matches("hour|month|weekday")) %>% 
-  mutate( return = fct_rev(return)) %>% 
   pivot_longer(-return) %>% 
   nest(.by = name) %>% 
   mutate(
@@ -489,15 +489,16 @@ healthcare2 %>%
 
 
 ```
+
 Diagnosis, or its lack to be more specific, indeed seems to be a predictor of return. However, the relationship is not as strong as anticipated. 
 
-Regardless of the hospital, the proportion of those who returned within 30 days to the hospital was the same. 
+Regardless of the hospital, the proportion of those who returned within 30 days to the hospital was almost the same. 
 
 Interestingly, in almost all variables that had `NA`, missing value was associated with a higher chance of return.
 
 
 
-## Exploration of quantitative variables
+## Exploration of continuous variables
 
 ### Descriptive statistics and distribution of age, charges, and diagnosis details
 
@@ -530,7 +531,7 @@ Charges encompassed from `r descriptives2$charges[2]` to `r descriptives2$charge
 ```{r}
 
 healthcare2 %>% 
-  select(where(is.numeric)) %>% 
+  select(where(is.numeric), -index) %>% 
   pivot_longer(everything()) %>% 
   ggplot(aes(value)) +
   geom_histogram() +
@@ -542,30 +543,36 @@ healthcare2 %>%
 
 Most of the patients were either in their early adulthood or middle-age.
 
-
+Charges displays a pareto distribution, which makes sense, as most cases should be mild to moderate without the need for life-saving, expensive treatment, like invasive surgeries. 
 
 
 ```{r}
 
-charges_sep <- healthcare2 %>% 
-  mutate(charges_z = scale(charges)) %>% 
-  {
-    charges_cleaner <- filter(., abs(charges_z) <= 2)
-    charges_extreme <- filter(., abs(charges_z) > 2)
-    list(charges_extreme, charges_cleaner) %>% 
-      set_names(c("charges_cleaner", "charges_extreme"))
-  }
+# Add breaks and labels for the intervales of the charges' variable
+breaks <-  c(seq(0, 10000, 1000), sd(healthcare2$charges), max(healthcare2$charges))
+for_breaks <- format(breaks, scientific = F)
 
+healthcare2 <- healthcare2 %>% 
+  mutate(
+    charges_int = cut(
+      charges, 
+      breaks = breaks,
+      labels = str_c(for_breaks[-length(for_breaks)], for_breaks[-1], sep = " -")
+    )
+  ) 
 
-charges_sep$charges_cleaner %>% 
-  ggplot(aes(charges)) +
-  geom_histogram()
+healthcare2 %>% 
+  freq_table(charges_int) %>% 
+  mutate(cum_prop = cumsum(prop)) %>% 
+  own_table()
 
-charges_sep$charges_extreme %>% 
-  ggplot(aes(charges)) +
-  geom_histogram()
 
 ```
+
+
+Majority of the patients (75%) were charged between 0 and 4000 thousand dollars. 
+
+Still, a noticeable number of patients were charged above 10k, with even 5% reaching more than 28k dollars.
 
 
 
@@ -573,16 +580,30 @@ charges_sep$charges_extreme %>%
 ```{r}
 
 healthcare2 %>% 
-  select(where(is.numeric), return) %>% 
-  pivot_longer(-return) %>% 
-  ggplot(aes(value, color = return)) +
-  geom_density() +
-  facet_wrap(~name, scales = "free")
+  ggplot(aes(age, color = return)) +
+  geom_density() 
+  
 
 ```
-Being between 50 and 60 years old was associated with a higher chance of return.
-The relationship is not linear.
 
+Being between 50 and 60 years old was associated with a higher chance of return.
+This was somewhat reversed for people above 65 years old and, to a lesser degree, between 25 and 35.
+
+
+
+
+```{r}
+healthcare2 %>% 
+  freq_table(charges_int, return) %>% 
+  ggplot(aes(charges_int, prop, fill = return)) +
+  geom_bar(stat = "identity") +
+  coord_flip()
+
+
+```
+
+Simplifying things, the smaller the charge, the higher the chance of return. 
+However, the rates of return were relatively similar for patients who were charged between 1k and 28k dollars. The biggest differences were observed for those who either were charged very little (up to 1k) or a lot (above 28k).
 
 
 ## Exploration of the date / time variables
@@ -600,10 +621,11 @@ healthcare2 %>%
   
 
 ```
-The arrivals and departures were most frequent during late afteroon and late evening hours and least frequent during morning. 
+
+The arrivals and departures were most frequent during late afternoon and late evening hours and least frequent during morning. 
 The months with somewhat higher departures and arrivals were January (possibly associated with the New Year's Eve) and March to July. There is no data for October.
 
-Interestingly, the corresponding distributions of arrivals and departures in pair of variables look almost identical.
+Interestingly, the corresponding distributions of arrivals and departures in pairs of variables look almost identical.
 
 ```{r}
 # Identify different values between hour variables
@@ -611,16 +633,13 @@ setdiff(healthcare2$hour_arr, healthcare2$hour_dep)
 
 
 ```
-Indeed, they are identical. This could mean that the time between their arrival and, following discharge, departure was always shorter than one hour. However, a more plausible explanation is that there is a methodological error in data preparation, as one would expect at several instances of patients who arrived at the end of a given hour and left at the onset of the next hour.
+Indeed, they are identical. This could mean that the time between their arrival and, following discharge, departure was always shorter than one hour. However, a more plausible explanation is that there is a methodological error in data preparation, as one would expect at least few instances of patients who arrived at the end of a given hour and left at the onset of the next.
 
 
-WHAT TO DO ABOUT THE FEW NOT DUPLICATED CASES BELOW?
-LOOKS LIKE THERE IS SOME INCONSISTENCY IN DATA
 
 ```{r}
 
-healthcare2 %>% 
-  filter(same_day == 0) %>% 
+date_unique <- healthcare2 %>% 
   select(matches("month|weekday|hour")) %>% 
   pivot_longer(
     everything(), 
@@ -634,13 +653,24 @@ healthcare2 %>%
   mutate(
     duplicated = arr == dep
   ) %>% 
-  filter(!duplicated)
+  filter(!duplicated) %>% 
+  count(date) %>% 
+  set_names("Data", "Frequency")
+
+healthcare2 %>% 
+  count(same_day) %>% 
+  filter(same_day == 0) %>% 
+  set_names("Data", "Frequency") %>% 
+  add_row(date_unique) %>% 
+  mutate(Data = c("Different date discharge", "Difference in month departure and arrival")) %>% 
+  own_table()
 
 
 ```
 
+Interestingly, in the case of `r date_unique$Frequency[1]` observations, months for arrival and departure  were different. However, this is a very small number and it's also inconsistent with the number from the`same_day` variable. 
 
-Regardless of the true reason, a duplicate should be removed to avoid multicollinearity. This also includes the month and weekday variables, as it follows that they too have to be duplicated.
+In order to avoid multicollinearity and to establish consistency, departure date variables will be removed.
 
 
 ```{r}
@@ -667,14 +697,15 @@ healthcare3 %>%
   filter(return == "Yes")  %>% 
   ggplot(aes(value, prop, group = 1)) +
   geom_bar(stat = "identity") +
-  geom_line(color = colors[1], linewidth = 0.8) +
-  facet_wrap(~name, scales = "free", ncol = 2)
+  geom_line(color = colors[2], linewidth = 0.8) +
+  facet_wrap(~name, scales = "free", ncol = 2) +
+  ggtitle("Rate of patient returns based on month, weekday and hour of the day")
     
 
 
 ```
 
-The highest numbers of returns were observed from night to morning peaking in early-morning hours (between 5 and 7 a.m.). The relationship is, however, non-linear and as the daytime has a cyclic nature it's starting point is chosen arbitrarily. This, with previous considerations, reasons for operationalizing hour of the day as a categorical variable.
+The highest numbers of returns were observed from night to morning peaking in early-morning hours (between 5 and 7 a.m.). The relationship is, however, non-linear and as the daytime has a cyclic nature it's starting point is chosen arbitrarily. This, with previous considerations, calls for operationalizing hour of the day as a categorical variable.
 
 The rates of returns were more or less the same throughout the year with the exception of September, which was associated with noticeably lower numbers of returns. During the week, Monday was associated with somewhat higher rate of returns compared to the rest of the week. 
 
@@ -683,9 +714,9 @@ This speaks for reducing the number of levels such to group neighbouring levels 
 
 ```{r}
 
-healthcare3 %>% 
+healthcare3 <- healthcare3 %>% 
   mutate(
-    month = factor(month, labels = month.abb[-11]),
+    month = factor(month, labels = month.abb[-10]),
     weekday = factor(weekday, labels = c(
       "Mon",
       "Tue",
@@ -696,6 +727,51 @@ healthcare3 %>%
       "Sun"
     ))
   )
+
+```
+
+# Tasks for now
+
+**Crucial questions at this moment of the analysis**
+
+1.    What exactly is the main goal here?
+    -   Is pure prediction more important?
+    -   Or, is interpretability more important?
+2.    In other words, should we aim for fitting the best possible model or finding specific relationships between predictors and the DV, including potential interaction effects?
+
+
+Perhaps create code that will create or possible combinations of simple interactions.
+
+# Interaction effects
+
+
+```{r}
+health_list <- healthcare3 %>% 
+  select(-c(index, charges_int, where(is.numeric))) 
+
+
+
+health_list %>% 
+  pivot_longer(-c(2, return)) 
+```
+
+
+https://ww2.coastal.edu/kingw/statistics/R-tutorials/loglin.html
+
+1.    Estimate effect sizes for interaction effects
+2.    Extract only those which are above a certain effect size
+
+
+```{r}
+health_list %>% 
+  pivot_longer(-c(2, return)) %>% 
+  nest(.by = name) %>% 
+  mutate(
+    freq = map(data, freq_table, gender, value, return)
+  ) %>% 
+  unnest(freq) 
+
+
 
 ```
 
