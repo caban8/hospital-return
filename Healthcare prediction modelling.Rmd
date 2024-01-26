@@ -740,7 +740,7 @@ healthcare3 <- healthcare3 %>%
 2.    In other words, should we aim for fitting the best possible model or finding specific relationships between predictors and the DV, including potential interaction effects?
 
 
-Perhaps create code that will create or possible combinations of simple interactions.
+Perhaps create code that will create possible combinations of simple interactions.
 
 # Interaction effects
 
