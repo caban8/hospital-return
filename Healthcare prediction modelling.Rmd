@@ -746,13 +746,101 @@ Perhaps create code that will create possible combinations of simple interaction
 
 
 ```{r}
-health_list <- healthcare3 %>% 
-  select(-c(index, charges_int, where(is.numeric))) 
+# Create list with all combinations of categorical variables
+combinations <- healthcare3 %>% 
+  select(where(is.factor), -return) %>% 
+  map(unique) %>% 
+  keep(~length(.) <= 5) %>%  # We consider only variables with few levels for the sake of interpretability
+  names() %>% 
+  combn(2, simplify = F) %>% 
+  map(function(x) {c(x, "return")})
+
+
+# Iterate log-linear models using glm on each combination of 2 categorical variables with outcome
+interactions <- combinations %>% 
+  map(function(x) {count(healthcare3, pick(x))}) %>% 
+  map(glm, formula = n ~ .^3, family = poisson) %>% 
+  map(anova, test = "Chisq") %>% 
+  map(
+    function(x) {
+      as.data.frame(x) %>% 
+        set_names(c("df", "deviance", "resid_df", "resid.dev", "p")) %>% 
+        mutate(
+        variable = rownames(.),
+        dev_prop = deviance / max(resid.dev) * 100
+        ) %>% 
+        filter(str_detect(variable, ".*:.*:")) %>% 
+        select(variable, deviance, dev_prop, p) %>% 
+        as_tibble()
+  
+    }
+  ) %>% 
+  reduce(add_row)
+
+
+# Select the strongest interactions
+interactions2 <- interactions %>% 
+  filter(p < 0.001) %>% 
+  arrange(desc(dev_prop))
+```
+
+
+We can extract odds ratio for the more important interactions
+
+Kluczowy problem - odds ratio mogę obliczać tylko dla tabel 2 x 2, a nie wszystkie takei są
+
+Rozwiązania
+
+-   Cramer's V
+-   Uwaga - zmienic kolejnosc kolumn dla kazdego porowniania tak, zeby jako pierwsza byla zmienna o większej liczbie poziomów
 
 
 
-health_list %>% 
-  pivot_longer(-c(2, return)) 
+```{r}
+# Create odds ration function
+odds_ratio <- function(x) {
+  # Turn a 2-column df to table
+  tab <- table(x)
+  
+  # Obtain odds ratio
+  odds <- (tab[2, 2] / tab[2, 1]) / (tab[1, 2] / tab[1, 1])
+  
+  return(odds)
+}
+
+
+
+# Extract odds ratio for all interaction effects
+interactions2 %>% 
+  pull(variable) %>% 
+  map(str_split_1, ":") %>% 
+  map(
+    function(x) {
+      select(healthcare3, all_of(x)) %>% 
+        nest(.by = 1) %>% 
+        mutate(variable = names(.)[1]) %>% 
+        set_names(c("levels", "data", "variable")) 
+      }
+    ) %>% 
+  reduce(add_row) %>% 
+  select(variable, levels, data) %>% 
+  mutate(
+    odds = map_dbl(data, odds_ratio),
+    effect = map_chr(data, function(x) {
+      names(x) %>% 
+        str_c(collapse = " on ")
+    })
+  )
+```
+
+
+```{r}
+
+healthcare3 %>% 
+  ggplot() +
+  geom_mosaic(aes(x = product(diagnosis, return, dc_result), fill = return))
+
+
 ```
 
 
