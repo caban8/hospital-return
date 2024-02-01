@@ -21,7 +21,7 @@ output:
 ```{r setup, include=FALSE}
 if (!require(pacman)) {install.packages("pacman")}
 
-pacman::p_load(plyr, kableExtra, rstatix, rstatix, tidyverse)
+pacman::p_load(plyr, broom, kableExtra, rstatix, rstatix, tidyverse, ggmosaic, DT, rpart, rpart.plot, glmnet)
 
 
 # Import data
@@ -730,19 +730,10 @@ healthcare3 <- healthcare3 %>%
 
 ```
 
-# Tasks for now
-
-**Crucial questions at this moment of the analysis**
-
-1.    What exactly is the main goal here?
-    -   Is pure prediction more important?
-    -   Or, is interpretability more important?
-2.    In other words, should we aim for fitting the best possible model or finding specific relationships between predictors and the DV, including potential interaction effects?
 
 
-Perhaps create code that will create possible combinations of simple interactions.
 
-# Interaction effects
+## Interaction effects
 
 
 ```{r}
@@ -767,10 +758,10 @@ interactions <- combinations %>%
         set_names(c("df", "deviance", "resid_df", "resid.dev", "p")) %>% 
         mutate(
         variable = rownames(.),
-        dev_prop = deviance / max(resid.dev) * 100
+        dev_perc = deviance / max(resid.dev) * 100
         ) %>% 
         filter(str_detect(variable, ".*:.*:")) %>% 
-        select(variable, deviance, dev_prop, p) %>% 
+        select(variable, deviance, dev_perc, p) %>% 
         as_tibble()
   
     }
@@ -781,87 +772,332 @@ interactions <- combinations %>%
 # Select the strongest interactions
 interactions2 <- interactions %>% 
   filter(p < 0.001) %>% 
-  arrange(desc(dev_prop))
+  arrange(desc(dev_perc)) %>% 
+  mutate(across(where(is.numeric), ~round(., 3)))
+
+datatable(interactions2)
 ```
 
+Assuming *p* = 0.001 as the cut-off point, there were `r nrow(interactions2)` significant interaction effects. Statistical significance, of course, on its own, should be treated with caution, especially when dealing with large samples. In order to inspect deeper the effects of the interactions, we could obtain Cramer's V and, for 2x2 relationships, odds ratios, separately on the levels of the third variable. 
 
-We can extract odds ratio for the more important interactions
-
-Kluczowy problem - odds ratio mogę obliczać tylko dla tabel 2 x 2, a nie wszystkie takei są
-
-Rozwiązania
-
--   Cramer's V
--   Uwaga - zmienic kolejnosc kolumn dla kazdego porowniania tak, zeby jako pierwsza byla zmienna o większej liczbie poziomów
+**Dodać odds ratio confidence interval**
 
 
 
 ```{r}
-# Create odds ration function
+# Create odds ratio function
 odds_ratio <- function(x) {
   # Turn a 2-column df to table
   tab <- table(x)
   
-  # Obtain odds ratio
-  odds <- (tab[2, 2] / tab[2, 1]) / (tab[1, 2] / tab[1, 1])
-  
+  # Obtain odds ratio only for 2x2 tables
+  if (all(dim(tab) == 2)) {
+  odds <- (tab[2, 2] / tab[2, 1]) / (tab[1, 2] / tab[1, 1]) 
+  odds <- round(odds, 2)
+  } else {odds <- NA} 
   return(odds)
+}
+
+# Create cramer's v function for iterated analysis
+cramer_map <- function(x) {
+  round(cramer_v(x[[1]], x[[2]]), 3)
 }
 
 
 
 # Extract odds ratio for all interaction effects
-interactions2 %>% 
+effects <- interactions2 %>% 
   pull(variable) %>% 
   map(str_split_1, ":") %>% 
   map(
     function(x) {
-      select(healthcare3, all_of(x)) %>% 
+      # Select appropriate variables
+      df <- select(healthcare3, all_of(x))
+      
+      # Extract order such that var with more levels will be first
+      index <- df %>% 
+        select(-return) %>% 
+        map(levels) %>% 
+        map_dbl(length) %>% 
+        order(decreasing = T)
+      
+      # Nest data to allow for iterated analysis
+      df[c(index, 3)] %>% 
         nest(.by = 1) %>% 
         mutate(variable = names(.)[1]) %>% 
-        set_names(c("levels", "data", "variable")) 
+        set_names(c("level", "data", "variable")) 
       }
     ) %>% 
   reduce(add_row) %>% 
-  select(variable, levels, data) %>% 
+  select(variable, level, data) %>% 
   mutate(
-    odds = map_dbl(data, odds_ratio),
     effect = map_chr(data, function(x) {
       names(x) %>% 
         str_c(collapse = " on ")
-    })
-  )
+    }),
+    odds = map_dbl(data, odds_ratio),
+    cramer = map_dbl(data, cramer_map)
+  ) %>% 
+  select(-data)
+
+datatable(effects)
+
 ```
+
+**Some of the more interesting effects**
+
+
 
 
 ```{r}
 
 healthcare3 %>% 
   ggplot() +
-  geom_mosaic(aes(x = product(diagnosis, return, dc_result), fill = return))
+  geom_mosaic(aes(x = product(diagnosis, return, dc_result), fill = return)) +
+  ggtitle("Rates of return based on diagnosis and discharge result")
 
 
 ```
+
+Overall, being discharged to a destination other than home or self care was associated with a higher proporiton of returns. However, more importantly, the diagnosis among those patients who were discharged to home or self care did not affect the rates of return. In contrast, for patients discharged to other types of care, the odds of return were three times smaller for those who had received a diagnosis.
+
+
+
+
+```{r}
+healthcare3 %>% 
+  ggplot() +
+  geom_mosaic(aes(x = product(consult_order, return, dc_result), fill = return))
+```
+
+Even bigger differences between effects were observed when discharge result was moderated by consultation. Even though lack of consultation was generally associated with more returns, the results were noticeably more pronounced for those patients who were discharged to other types of care.
+
+
+
+
+
+
+
+```{r}
+healthcare3 %>% 
+  ggplot() +
+  geom_mosaic(aes(x = product(diagnosis, return, gender), fill = return))
+
+
+healthcare3 %>% 
+  ggplot() +
+  geom_mosaic(aes(x = product(diagnosis, return, severity), fill = return)) +
+  coord_flip()
+
+
+```
+
+
+# Model building
+
+
+
+
+```{r}
+
+# Exclude unnecessary or repated variables
+healthcare_final <- healthcare3 %>% 
+  select(-c(index, charges_int))
+
+# Divide data to train and test datasets
+set.seed(321)
+train <- healthcare_final %>% 
+  slice_sample(prop = 3/4)
+
+test <- setdiff(healthcare_final, train)
+
+```
+
+
+
+```{r}
+
+base_train <- train %>% 
+  freq_table(return) %>% 
+  arrange(prop) %>% 
+  slice(1) %>% 
+  pull(prop)
+
+
+```
+
+The misclassification error for the null model is `r base_train`%. 
+
+
+
+```{r}
+
+
+```
+
+
+
+## Tree model
+
+Let's start with a basic tree model.
+
+### Basic model
+
+
+```{r}
+fit_tree <- rpart(return ~ ., data = train)
+
+
+
+summary(fit_tree)
+rpart.plot(fit_tree)
+rpart::printcp(fit_tree)
+```
+
+
+```{r}
+fit_tree$cptable %>% 
+  as_tibble() %>% 
+  mutate(
+    cs_error = xerror * xstd
+  )
+
+predict(fit_tree, newdata = test, type = "class")
+
+```
+
+
+
+```{r}
+
+# Set a range of cp values
+cps <- seq(0.0001, 0.1, 0.005)
+
+# Create a function for iterated tree modelling
+rpart_map <- function(cp) {
+  rpart(return ~ ., data = train, cp = cp)
+}
+
+# Train many tree models depending on cp
+df_trees <- cps %>% 
+  enframe() %>% 
+  mutate(
+    fit_train = map(value, rpart_map)
+  )
+
+# Compare miss error on the test set
+df_trees %>% 
+  mutate(
+    pred_test = map(fit_train, predict, type = "class", newdata = test),
+    miss_error = map_dbl(pred_test, function(x) {
+      mean(x != test$return)
+    })
+  )
+
+```
+
+
+
+
+## Logistic regression model
+
+
+### Lasso regression
+
+
+
+```{r}
+X <- model.matrix(return ~ ., data = train)[,-1]
+Y <- train$return
+
+fit_lasso <- glmnet(X, Y, family = "binomial")
+
+plot(fit_lasso)
+```
+
+
+```{r}
+fit_lasso %>% 
+  tidy() %>% 
+  ggplot(aes(lambda, estimate, color = term)) +
+  geom_line() +
+  theme(legend.position = "none")
+
+
+```
+
+
+```{r}
+
+# Run 10 fold cross validation lasso regression
+fit_lasso_cv <- cv.glmnet(X, Y, alpha = 1, family = "binomial")
+plot(fit_lasso_cv)
+
+coefs_min <- coef(fit_lasso_cv, s = fit_lasso_cv$lambda.min)[, 1] %>% 
+  keep(. != 0) %>% 
+  {.[-1]} # Exclude the intercept
+
+coefs_1se <- coef(fit_lasso_cv, s = fit_lasso_cv$lambda.1se)[, 1] %>% 
+  keep(. != 0) %>% 
+  {.[-1]}
+
+```
+Based on the 10-fold cross validation the model with a lambda that produced the minimum average cross-validation error had `r length(coefs_min)` predictos. 
+
+However, applying the one standard error rule, we can get a model with substantially less predictors, that is, `r length(coefs_1se)`.
+
+
+#### Extracting the predictors to a new logistic model
+
+
+```{r}
+list(coefs_1se, coefs_min) %>% 
+  map(names)
+```
+
+
+```{r}
+
+# Extract the pure names of the variables for model building
+logistic_formulas <- list(coefs_1se, coefs_min) %>% 
+  map(names) %>% 
+  map(str_replace, "^(.+?)[A-Z0-9].*$", "\\1") %>% 
+  map(unique) %>% 
+  map(str_c,collapse = " + ") %>% 
+  map(function(x) str_c("return ~ ", x)) 
+
+
+
+
+```
+
+
+
+
+### Stepwise with interactions
+
+
+
+
+
+
+
+
+# Tasks for now
+
+**Crucial questions at this moment of the analysis**
+
+1.    What exactly is the main goal here?
+    -   Is pure prediction more important?
+    -   Or, is interpretability more important?
+2.    In other words, should we aim for fitting the best possible model or finding specific relationships between predictors and the DV, including potential interaction effects?
 
 
 https://ww2.coastal.edu/kingw/statistics/R-tutorials/loglin.html
 
-1.    Estimate effect sizes for interaction effects
-2.    Extract only those which are above a certain effect size
 
 
-```{r}
-health_list %>% 
-  pivot_longer(-c(2, return)) %>% 
-  nest(.by = name) %>% 
-  mutate(
-    freq = map(data, freq_table, gender, value, return)
-  ) %>% 
-  unnest(freq) 
+# End notes
 
-
-
-```
-
-
+**Perhaps next time try to first create several versions of the original datasets which will differ in the way certain variables are recoded.**
 
