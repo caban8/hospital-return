@@ -21,7 +21,7 @@ output:
 ```{r setup, include=FALSE}
 if (!require(pacman)) {install.packages("pacman")}
 
-pacman::p_load(plyr, broom, kableExtra, rstatix, rstatix, tidyverse, ggmosaic, DT, rpart, rpart.plot, glmnet)
+pacman::p_load(plyr, broom, kableExtra, rstatix, rstatix, tidyverse, ggmosaic, DT, rpart, rpart.plot, glmnet, randomForest, ranger)
 
 
 # Import data
@@ -900,16 +900,21 @@ healthcare3 %>%
 
 ```{r}
 
-# Exclude unnecessary or repated variables
+# Exclude unnecessary or repeated variables
 healthcare_final <- healthcare3 %>% 
   select(-c(index, charges_int))
 
-# Divide data to train and test datasets
-set.seed(321)
-train <- healthcare_final %>% 
-  slice_sample(prop = 3/4)
 
-test <- setdiff(healthcare_final, train)
+# Divide data to train, validation, and test datasets using 60 - 20 - 20 split
+set.seed(321)
+
+indexes <- sample(1:3, size = nrow(healthcare_final), replace = T, prob = c(0.6, 0.2, 0.2))
+
+train <- healthcare_final[indexes == 1,]
+validation <- healthcare_final[indexes == 2,]
+test <- healthcare_final[indexes == 3,]
+
+
 
 ```
 
@@ -962,13 +967,29 @@ fit_tree$cptable %>%
     cs_error = xerror * xstd
   )
 
-predict(fit_tree, newdata = test, type = "class")
+predict(fit_tree, newdata = validation, type = "class")
 
 ```
 
 
 
 ```{r}
+
+# Create a function for calculating MSE
+mse <- function(x, data) {
+  
+  # Predict based on the validation set
+  if (class(x) == "ranger") {
+    pred <- predict(x, data = data)
+    y <- pred$predictions
+    } else (
+      y <- predict(x, newdata = data)
+    )
+  # Calculate the error rate
+  mean(y != validation$return)
+  
+}
+
 
 # Set a range of cp values
 cps <- seq(0.0001, 0.1, 0.005)
@@ -985,22 +1006,118 @@ df_trees <- cps %>%
     fit_train = map(value, rpart_map)
   )
 
-# Compare miss error on the test set
-df_trees %>% 
+# Compare miss error on the validation set
+df_trees2 <- df_trees %>% 
   mutate(
-    pred_test = map(fit_train, predict, type = "class", newdata = test),
-    miss_error = map_dbl(pred_test, function(x) {
-      mean(x != test$return)
+    pred_validation = map(fit_train, predict, type = "class", newdata = validation),
+    miss_error = map_dbl(pred_validation, function(x) {
+      mean(x != validation$return)
     })
-  )
+  ) %>% 
+  select(name, value, miss_error) %>% 
+  set_names(c("Model", "Complexity Parameter", "validation classification error")) 
+
+best_tree_miss <- min(df_trees2$`validation classification error`)
+
+df_trees2 %>% 
+  datatable()
+
+```
+
+Models with a complexity parameter between 0.05 and 0.150 resulted in the smallest prediction error for the validation dataset.
+
+Either increasing or decreasing complexity parameter was associated with a larger prediction error. 
+
+
+### Bagging and Random forest
+
+
+```{r}
+# set.seed(321)
+# 
+# randomForest(return ~ ., data = train, ntree = 1000)
+# 
+# 
+# forests <- tibble(mtry = 8:(ncol(train) - 1)) %>% 
+#   mutate(
+#     model = map(mtry, function(x) {
+#       randomForest(
+#         return ~ ., 
+#         data = train, 
+#         mtry = x,
+#         ntree = 100 # To safe some computing power
+#         )})
+#   )
+
+
 
 ```
 
 
 
+#### Ranger package for parallel computing
+
+Porównać przy pomocy funkcji pod względem speed
+Dodać również zabawę z num trees, ale po pomniejszeniu liczby predyktorów poprzez kategoryzację hour, month, weekday
+
+```{r}
+
+set.seed(321)
+
+# Fit many models varying the m parameter
+forests <- tibble(mtry = 2:(ncol(train) - 1)) %>% 
+  mutate(
+    model = map(mtry, function(x) {
+      ranger(
+        return ~ ., 
+        data = train, 
+        mtry = x,
+        importance = "impurity"
+        # num.trees = 100 # To safe some computing power
+        )})
+  )
+```
+
+
+```{r}
+# Calculate the MSE for the validation dataset
+forests <- forests %>% 
+  mutate(
+    mse = map_dbl(model, mse, data = validation)
+  ) %>% 
+  arrange(mse)
+
+
+
+
+
+
+```
+
+The best random forest model was achieved using m = `r forests$mtry[[1]]`.
+
+
+```{r}
+
+importance(forests$model[[1]]) %>% 
+  enframe() %>% 
+  arrange(desc(value))
+
+
+```
+
+
+
+```{r}
+
+
+```
+
+
 
 ## Logistic regression model
 
+We now t
 
 ### Lasso regression
 
@@ -1067,6 +1184,78 @@ logistic_formulas <- list(coefs_1se, coefs_min) %>%
   map(function(x) str_c("return ~ ", x)) 
 
 
+# Compare models in terms of validation MSE
+lasso_best <- logistic_formulas %>% 
+  map(as.formula) %>% 
+  map(glm, family = binomial, data = train) %>% 
+  map(predict, newdata = validation, type = "response") %>% 
+  map_dbl(function(x) {
+    mean(if_else(x >= 0.5, "Yes", "No") != validation$return)
+  }) %>% 
+  set_names(
+    str_c("Model with ", c(length(coefs_1se), length(coefs_min)), " predicotrs")
+  ) 
+
+
+lasso_best %>% 
+  enframe() %>% 
+  own_table()
+
+
+```
+
+The two 
+
+
+### Stepwise with interactions
+
+
+Consider to first recode time variables to a smaller number of levels, especially hour.
+
+
+```{r}
+# # Extract obtained interactions to a formula like vector
+# interactions_formula <- interactions2 %>% 
+#   pull(variable) %>% 
+#   str_replace(":return", "") 
+#   
+# 
+# # Create formula for the model with interactions
+# int_formula <- healthcare_final %>% 
+#   names() %>% 
+#   keep(. != "return") %>% 
+#   c(interactions_formula) %>% 
+#   str_c(collapse = " + ") %>% 
+#   {str_c("return ~ ", .)} %>% 
+#   as.formula()
+#   
+# 
+# 
+# train %>% 
+#   count(return) 
+# 
+# # Set the starting model
+# step_full <- glm(int_formula, data = train, family = "binomial")
+# 
+# # Set the null model
+# step_null <- glm(return ~ 1, data = train, family = "binomial")
+# 
+# 
+# # Build the step model
+# fit_step <- step(step_full, c(upper = step_full, lower = step_null), direction = "backward")
+```
+
+
+```{r}
+
+
+step_predicted <- predict(fit_step, newdata = validation, type = "response") %>% 
+  {if_else(. >= 0.5, "Yes", "No")}  
+  
+
+step_miss <- mean(validation$return != step_predicted)
+
+
 
 
 ```
@@ -1074,8 +1263,18 @@ logistic_formulas <- list(coefs_1se, coefs_min) %>%
 
 
 
-### Stepwise with interactions
 
+
+## Best models comparison
+
+
+
+```{r}
+
+best_tree_miss
+step_miss
+
+```
 
 
 
