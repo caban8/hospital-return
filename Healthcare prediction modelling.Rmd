@@ -21,7 +21,7 @@ output:
 ```{r setup, include=FALSE}
 if (!require(pacman)) {install.packages("pacman")}
 
-pacman::p_load(plyr, broom, kableExtra, rstatix, rstatix, tidyverse, ggmosaic, DT, rpart, rpart.plot, glmnet, randomForest, ranger)
+pacman::p_load(plyr, broom, kableExtra, rstatix, rstatix, tidyverse, ggmosaic, DT, rpart, rpart.plot, glmnet, randomForest, ranger, gbm, xgboost)
 
 
 # Import data
@@ -572,7 +572,7 @@ healthcare2 %>%
 
 Majority of the patients (75%) were charged between 0 and 4000 thousand dollars. 
 
-Still, a noticeable number of patients were charged above 10k, with even 5% reaching more than 28k dollars.
+Still, a noticeable number of patients were charged above 10k, with 5% even reaching more than 28k dollars.
 
 
 
@@ -602,8 +602,8 @@ healthcare2 %>%
 
 ```
 
-Simplifying things, the smaller the charge, the higher the chance of return. 
-However, the rates of return were relatively similar for patients who were charged between 1k and 28k dollars. The biggest differences were observed for those who either were charged very little (up to 1k) or a lot (above 28k).
+Generally speaking, the smaller the charge, the higher the chance of return. 
+However, the rates of return were relatively similar for patients who were charged between 1k and 28k dollars. The biggest differences were observed for those who were charged either very little (up to 1k) or a lot (above 28k).
 
 
 ## Exploration of the date / time variables
@@ -699,13 +699,14 @@ healthcare3 %>%
   geom_bar(stat = "identity") +
   geom_line(color = colors[2], linewidth = 0.8) +
   facet_wrap(~name, scales = "free", ncol = 2) +
-  ggtitle("Rate of patient returns based on month, weekday and hour of the day")
+  ggtitle("Rates of patient returns based on month, weekday and hour of the day")
     
 
 
 ```
 
-The highest numbers of returns were observed from night to morning peaking in early-morning hours (between 5 and 7 a.m.). The relationship is, however, non-linear and as the daytime has a cyclic nature it's starting point is chosen arbitrarily. This, with previous considerations, calls for operationalizing hour of the day as a categorical variable.
+The highest numbers of returns were observed from night to morning, peaking in the early-morning hours (between 5 and 7 a.m.). The relationship is, however, non-linear, and as the daytime has a cyclic nature, its starting point is chosen arbitrarily. 
+This, along with previous considerations, calls for operationalizing the hour of the day as a categorical variable.
 
 The rates of returns were more or less the same throughout the year with the exception of September, which was associated with noticeably lower numbers of returns. During the week, Monday was associated with somewhat higher rate of returns compared to the rest of the week. 
 
@@ -725,10 +726,24 @@ healthcare3 <- healthcare3 %>%
       "Fri",
       "Sat",
       "Sun"
+    )),
+    hour_cat = cut(as.double(hour) - 1, breaks = c(
+      -Inf, 2, 4, 7, 9, 12, 13, 23
+    )),
+    weekday_cat = cut(as.double(weekday), breaks = c(
+      -Inf, 1, 2, 3, 7
+    )),
+    month_cat = cut(as.double(month), breaks = c(
+      -Inf, 6, 7, 8, 9, 12
     ))
   )
 
+
+
+
 ```
+
+
 
 
 
@@ -859,7 +874,7 @@ healthcare3 %>%
 
 ```
 
-Overall, being discharged to a destination other than home or self care was associated with a higher proporiton of returns. However, more importantly, the diagnosis among those patients who were discharged to home or self care did not affect the rates of return. In contrast, for patients discharged to other types of care, the odds of return were three times smaller for those who had received a diagnosis.
+Overall, being discharged to a destination other than home or self care was associated with a higher proportion of returns. However, more importantly, the diagnosis among those patients who were discharged to home or self care did not affect the rates of return. In contrast, for patients discharged to other types of care, the odds of return were three times smaller for those who had received a diagnosis.
 
 
 
@@ -867,7 +882,8 @@ Overall, being discharged to a destination other than home or self care was asso
 ```{r}
 healthcare3 %>% 
   ggplot() +
-  geom_mosaic(aes(x = product(consult_order, return, dc_result), fill = return))
+  geom_mosaic(aes(x = product(consult_order, return, dc_result), fill = return)) +
+  theme(axis.text.x = element_text(angle = 90))
 ```
 
 Even bigger differences between effects were observed when discharge result was moderated by consultation. Even though lack of consultation was generally associated with more returns, the results were noticeably more pronounced for those patients who were discharged to other types of care.
@@ -878,7 +894,7 @@ Even bigger differences between effects were observed when discharge result was 
 
 
 
-```{r}
+```{r fig.asp=2}
 healthcare3 %>% 
   ggplot() +
   geom_mosaic(aes(x = product(diagnosis, return, gender), fill = return))
@@ -902,7 +918,7 @@ healthcare3 %>%
 
 # Exclude unnecessary or repeated variables
 healthcare_final <- healthcare3 %>% 
-  select(-c(index, charges_int))
+  select(-c(index, charges_int, hour, month, weekday))
 
 
 # Divide data to train, validation, and test datasets using 60 - 20 - 20 split
@@ -914,6 +930,12 @@ train <- healthcare_final[indexes == 1,]
 validation <- healthcare_final[indexes == 2,]
 test <- healthcare_final[indexes == 3,]
 
+# Separate features from outcome as required by some of the model functions
+X_train <- model.matrix(return ~ ., data = train)[,-1]
+Y_train <- as.double(train$return) - 1
+
+X_validation <- model.matrix(return ~ ., data = validation)[,-1]
+Y_validation <- as.double(validation$return) - 1
 
 
 ```
@@ -925,7 +947,7 @@ test <- healthcare_final[indexes == 3,]
 base_train <- train %>% 
   freq_table(return) %>% 
   arrange(prop) %>% 
-  slice(1) %>% 
+  dplyr::slice(1) %>% 
   pull(prop)
 
 
@@ -967,7 +989,7 @@ fit_tree$cptable %>%
     cs_error = xerror * xstd
   )
 
-predict(fit_tree, newdata = validation, type = "class")
+
 
 ```
 
@@ -1027,6 +1049,12 @@ df_trees2 %>%
 Models with a complexity parameter between 0.05 and 0.150 resulted in the smallest prediction error for the validation dataset.
 
 Either increasing or decreasing complexity parameter was associated with a larger prediction error. 
+
+
+```{r}
+
+
+```
 
 
 ### Bagging and Random forest
@@ -1106,12 +1134,86 @@ importance(forests$model[[1]]) %>%
 
 ```
 
+#### Boosting
+
+
+```{r}
+# Create DMatrix object
+dtrain <- xgb.DMatrix(data = X_train, label = Y_train)
+
+# Create a grid of different parameters combinations
+params_grid <- expand_grid(
+  eta = seq(0.1, 0.5, 0.1),
+  gamma = seq(seq(0.1, 1, 0.2)),
+  nrounds = seq(100, 300, 100)
+) %>% 
+  mutate(
+    objective = "binary:logistic",
+    nthread = 8,
+    max_depth = 6,
+    params = pmap(list(objective, nthread, eta, gamma, max_depth), list),
+    params = map(params, set_names, nm = c("objective","nthread", "eta", "gamma", "max_depth"))
+  )
+```
+
+
+```{r}
+# Fit the models
+xgboost_models <- params_grid %>% 
+  mutate(
+    model = map2(
+      params, 
+      nrounds, 
+      function(x, y) {
+        xgb.train(params = x, nrounds = y, data = dtrain)
+      }
+      )
+  )
+```
+
+
+```{r}
+# Predict
+xgboost_models2 <- xgboost_models %>% 
+  mutate(
+    predictions = map(model, predict, newdata = X_validation),
+    class = map(predictions, function(x) {if_else(x > 0.5, 1, 0)}),
+    miss_error = map_dbl(class, function(x) {mean(x != Y_validation)}),
+    miss_error = round(miss_error, 3)
+    ) %>% 
+  arrange(miss_error) %>% 
+  select(!where(is.list)) 
+  
+
+xgboost_models2  %>% 
+  select(-c(nthread, objective)) %>% 
+  datatable()
+
+
+```
+
+The boosted models varied in classification error 
+from `r min(xgboost_models2$miss_error)`
+to `r max(xgboost_models2$miss_error)`.
+
+
+
+
 
 
 ```{r}
 
 
+xgb.importance(model = xgboost_models$model[[1]]) %>% 
+  datatable()
+
+
 ```
+
+Analyzing the importance of the predictors for the model with the smallest validation classification error, age and charges were observed to have the highest contribution to the prediction.
+
+Of significant importance were also gender and ed result.
+
 
 
 
@@ -1124,10 +1226,9 @@ We now t
 
 
 ```{r}
-X <- model.matrix(return ~ ., data = train)[,-1]
-Y <- train$return
 
-fit_lasso <- glmnet(X, Y, family = "binomial")
+
+fit_lasso <- glmnet(X_train, Y_train, family = "binomial")
 
 plot(fit_lasso)
 ```
@@ -1147,9 +1248,10 @@ fit_lasso %>%
 ```{r}
 
 # Run 10 fold cross validation lasso regression
-fit_lasso_cv <- cv.glmnet(X, Y, alpha = 1, family = "binomial")
+fit_lasso_cv <- cv.glmnet(X_train, Y_train, alpha = 1, family = "binomial")
 plot(fit_lasso_cv)
 
+# Extract features which coefficients did not reduce to zero
 coefs_min <- coef(fit_lasso_cv, s = fit_lasso_cv$lambda.min)[, 1] %>% 
   keep(. != 0) %>% 
   {.[-1]} # Exclude the intercept
@@ -1167,7 +1269,7 @@ However, applying the one standard error rule, we can get a model with substanti
 #### Extracting the predictors to a new logistic model
 
 
-```{r}
+```{r include=FALSE}
 list(coefs_1se, coefs_min) %>% 
   map(names)
 ```
@@ -1178,14 +1280,16 @@ list(coefs_1se, coefs_min) %>%
 # Extract the pure names of the variables for model building
 logistic_formulas <- list(coefs_1se, coefs_min) %>% 
   map(names) %>% 
-  map(str_replace, "^(.+?)[A-Z0-9].*$", "\\1") %>% 
+  map(str_replace, "^(.+?)[A-Z0-9()].*$", "\\1") %>% 
   map(unique) %>% 
-  map(str_c,collapse = " + ") %>% 
+  map(str_c,collapse = " + ") 
+
+logistic_formulas2 <- logistic_formulas %>% 
   map(function(x) str_c("return ~ ", x)) 
 
 
 # Compare models in terms of validation MSE
-lasso_best <- logistic_formulas %>% 
+lasso_best <- logistic_formulas2 %>% 
   map(as.formula) %>% 
   map(glm, family = binomial, data = train) %>% 
   map(predict, newdata = validation, type = "response") %>% 
@@ -1204,44 +1308,42 @@ lasso_best %>%
 
 ```
 
-The two 
+The two logistic regression models were comparable in terms of validation classification error, although the one with less predictors was slightly better.
 
 
-### Stepwise with interactions
+#### Supplying the model with interactions
 
 
-Consider to first recode time variables to a smaller number of levels, especially hour.
 
 
 ```{r}
-# # Extract obtained interactions to a formula like vector
-# interactions_formula <- interactions2 %>% 
-#   pull(variable) %>% 
-#   str_replace(":return", "") 
-#   
-# 
-# # Create formula for the model with interactions
-# int_formula <- healthcare_final %>% 
-#   names() %>% 
-#   keep(. != "return") %>% 
-#   c(interactions_formula) %>% 
-#   str_c(collapse = " + ") %>% 
-#   {str_c("return ~ ", .)} %>% 
-#   as.formula()
-#   
-# 
-# 
-# train %>% 
-#   count(return) 
-# 
-# # Set the starting model
-# step_full <- glm(int_formula, data = train, family = "binomial")
-# 
-# # Set the null model
-# step_null <- glm(return ~ 1, data = train, family = "binomial")
-# 
-# 
-# # Build the step model
+# Extract obtained interactions to a formula like vector
+interactions_formula <- interactions2 %>% 
+ pull(variable) %>% 
+ str_replace(":return", "") 
+ 
+
+int_formula <-  str_c(
+  logistic_formulas2[[1]],
+  " + ",
+  str_c(interactions_formula, collapse = " + ")
+  ) %>% 
+  as.formula()
+
+ 
+
+
+train %>% 
+ count(return) 
+
+# Set the starting model
+step_full <- glm(int_formula, data = train, family = "binomial")
+
+# Set the null model
+step_null <- glm(return ~ 1, data = train, family = "binomial")
+
+
+# Build the step model
 # fit_step <- step(step_full, c(upper = step_full, lower = step_null), direction = "backward")
 ```
 
@@ -1249,7 +1351,7 @@ Consider to first recode time variables to a smaller number of levels, especiall
 ```{r}
 
 
-step_predicted <- predict(fit_step, newdata = validation, type = "response") %>% 
+step_predicted <- predict(step_full, newdata = validation, type = "response") %>% 
   {if_else(. >= 0.5, "Yes", "No")}  
   
 
@@ -1271,8 +1373,8 @@ step_miss <- mean(validation$return != step_predicted)
 
 ```{r}
 
-best_tree_miss
-step_miss
+# best_tree_miss
+# step_miss
 
 ```
 
