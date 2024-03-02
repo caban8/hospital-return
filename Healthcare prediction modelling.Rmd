@@ -21,7 +21,7 @@ output:
 ```{r setup, include=FALSE}
 if (!require(pacman)) {install.packages("pacman")}
 
-pacman::p_load(plyr, broom, kableExtra, rstatix, rstatix, tidyverse, ggmosaic, DT, rpart, rpart.plot, glmnet, randomForest, ranger, gbm, xgboost)
+pacman::p_load(plyr, broom, kableExtra, rstatix, rstatix, MASS, ggmosaic, DT, rpart, rpart.plot, glmnet, randomForest, ranger, gbm, xgboost, tidyverse)
 
 
 # Import data
@@ -34,22 +34,23 @@ healthcare <- read_csv("Hospitals_Train.csv")
 
 # Introduction 
 
-This is my attempt at finding the best tree model for the healthcare prediction data that was analyzed by [`ALIA107`](https://www.kaggle.com/code/bvc5283/healthcare-prediction/notebook) on kaggle. 
-Data was downloaded from here: https://github.com/HannahHan3/758T_PredictiveModeling
+This is my attempt at selecting the best classification model out of logistic regression and decision tree options for the healthcare prediction data that was analyzed by [`ALIA107`](https://www.kaggle.com/code/bvc5283/healthcare-prediction/notebook). 
+The data was downloaded from here: https://github.com/HannahHan3/758T_PredictiveModeling
 
-I will more or less try to reproduce the same effects as the user above, but refining the code, reporting language, and overall presentation of tables and figures as to make it more appealing to a general user.
-I will also expand the analysis when seen appropriate.
+I will by guided by the following aims:
 
-The goal is to predict whether a discharged patient will return to the hospital within 30 days.
+-   to refine the code
+-   to employ a more detailed EDA
+-   to look for possible interaction effects
+
+The goal is to predict whether a discharged patient returns to the hospital within 30 days.
 
 
 
 
 # Infrastructure
 
-Below I create a set of vectors that will serve as basic parameters mostly for producing tables and plots.
-Further, here I will set up all self-created functions.
-All of this helps with making the code shorter and cleaner.
+First, I create a set of vectors and functions that will help in automating the code in the context of producing tables and plots.
 
 ## Plots
 
@@ -93,6 +94,21 @@ own_table <- function(x) {
 
 ```
 
+
+## Functions
+
+
+```{r}
+
+class_error <- function(x, y) {
+  
+  mean(if_else(x >= 0.5, "Yes", "No") != y)
+  
+}
+
+
+
+```
 
 
 
@@ -162,7 +178,7 @@ missing %>%
 
 There are `r nrow(missing)` variables with missing data. However, only `r nrow(missing2)` have a noticeably high number of missing values, while the remaining stay below a level of 10%.
 
-We can check, if there is any pattern in missing values in relation to to the `return` (DV) variable.
+We can check, if there is any pattern in the missing values in relation to the `return` (DV) variable.
 
 
 ```{r}
@@ -189,9 +205,9 @@ healthcare %>%
 ```
 
 
-Differences in the proportions of those who returned were observed across variables that had missing values. Therefore, including information about missing values could benefit the model. Consequently, for character variables, `NA` will be coded as *'Missing'*.
+Differences in the proportions of those who returned were observed across variables with missing values. Therefore, incorporating information about these missing values could enhance the model's performance. Consequently, for character variables, `NA` will be coded as *'Missing'*.
 
-As `consult_in_ed` is a numerical variable, it is methodologically not possible to include a character value *'Missing'*. However, let's inspect its unique values.
+As `consult_in_ed` is a numerical variable, it is methodologically incorrect to include a character value such as *'Missing'*. However, let's inspect its unique values.
 
 ```{r}
 
@@ -199,8 +215,8 @@ unique(healthcare$consult_in_ed)
   
 
 ```
-This probably means that 1 represents the occurence of consultation, while `NA` represents lack of such occurence.
-However, having no such knowledge, it is safer to code `NA` as *'Missing'*.
+This likely indicates that a `1` represents the occurrence of consultation, while `NA` represents the absence of such an occurrence.
+However, having no definite knowledge, it is prudent to label `NA` as *'Missing'*. On a mathematical level, the choice of labeling won't affect the model.
 
 
 
@@ -231,10 +247,10 @@ healthcare <- healthcare %>%
 qualitatives <- healthcare %>% 
   select(where(is.character)) %>% 
   map(unique) %>% 
-  keep(~length(.) > 50) %>% 
   map(length) %>%  
   enframe() %>% 
-  unnest()
+  unnest() %>% 
+  arrange(desc(value))
   
 qualitatives %>% 
   own_table()
@@ -242,8 +258,8 @@ qualitatives %>%
 
 ```
 
-One character variable, namely, `r qualitatives$name[1]` has `r qualitatives$value[1]` unique values.
-However, based on the name, this seems to be a numerical variable.
+One character variable, `r qualitatives$name[1]`, has `r qualitatives$value[1]` unique values.
+However, given its name, it seems to be a continuous variable.
 
 
 ```{r}
@@ -254,6 +270,7 @@ healthcare %>%
 
 
 ```
+Its values, together with its name, almost certainly indicate that it is a continuous variable, representing how much money a given patient was charged for being admitted to the hospital.
 
 
 ```{r}
@@ -266,7 +283,7 @@ healthcare %>%
   own_table()
 ```
 
-A small portion of the observations for that variable has uninterpretable values. Nothing to worry about
+A small portion of the observations for that variable has uninterpretable values. Nothing to worry about.
 
 
 ```{r}
@@ -301,8 +318,11 @@ healthcare %>%
 ```
 Variables like Race or Ethnicity have two values that essentially mean the same thing - *"Declined to answer"* and *Unknown*". Both will be transformed to missing values.
 
-The **DC** stands for discharge, while **ED** for emergency department. Both consist of a substantial number of unique values. Using them in at least some of the models (e.g. regressions) would be highly penalized, because of a large number of predictors. Further, if we strive for higher interpretability, a simpler model is preferred. 
-Therefore, we will simplify those variables to a smaller number of levels. This will also include `race` and `financial_class`, as they also have above 10 levels.
+The abbreviations "**DC**" and "**ED**" stand for "discharge" and "emergency department", respectively.
+Both consist of a substantial number of unique values. 
+Incorporating them as is into some models, such as regressions, would lead to significant penalization due to the larger number of predictors.
+Moreover, aiming for higher interpretability favours a simpler model.
+Therefore, we will simplify those variables into a fewer number of levels. This will extend to `race` and `financial_class` as well, as they also feature more than 10 levels.
 
 ```{r}
 healthcare %>% 
@@ -319,7 +339,10 @@ healthcare %>%
 ```
 
 
-Based on the proportions, `dc_result` will be recoded to a variable with only two values, as the majority of the patients belonged to one category. The `ed_result` and `financial_class` variables have a more varied distribution and will be lumped up to the category with 5% of observations. In the latter case a more theoretically-oriented approach could be implemented, but it would require a higher domain-knowledge. `race` will be divided to three categories:
+Based on the observed proportions, `dc_result` will be recoded into a variable with only two values, reflecting that the majority of the patients fell into one category. 
+The `ed_result` and `financial_class` variables, which display a more varied distribution, will be consolidated such that categories representing more than 5% of observations will remain unchanged, while the rest will be grouped into an 'other' category.
+While a more theoretically-oriented approach could be applied to these variables, it would necessitate greater domain-specific knowledge. 
+ `race` will be divided into three categories:
 *"Black or African American"*, 
 *"White"* and 
 *"Other"*.
@@ -333,7 +356,7 @@ healthcare$dc_result %>%
   
 
 ```
-"Home Health Care Svc" sounds similar to "Home or Self Care". However, as the distinction is not obvious and I lack proper theoretical background, it will be left as it is.
+"Home Health Care Svc" appears similar to "Home or Self Care". However, due to the distinction between them not being clear and my lack of sufficient theoretical understanding, they will be maintained as separate categories.
 
 
 
@@ -410,7 +433,7 @@ healthcare2 %>%
 
 ```
 
-Three variables are binary which suggests that they are of *occured* / *not occured* nature and as such are categorical. They will be transformed to factor variables.
+Three variables are binary which suggests that they are of *occurred* vs *not occurred* nature and as such are categorical. They will be transformed to factor variables.
 
 Six of the numerical variables are date / time objects.
 They could be treated as either categorical or continuous variables, depending on the theoretical and methodological backgrounds. In this case, as our outcome variable is binary and there is no apparent and theoretically grounder reason to expect a linear aspect to it in terms of passing time, it is more methodologically sound to treat the date / time variables as factors, whereby the model would assess the effect of each time-point separately. 
@@ -1289,9 +1312,12 @@ logistic_formulas2 <- logistic_formulas %>%
 
 
 # Compare models in terms of validation MSE
-lasso_best <- logistic_formulas2 %>% 
+lasso_models <- logistic_formulas2 %>% 
   map(as.formula) %>% 
-  map(glm, family = binomial, data = train) %>% 
+  map(glm, family = binomial, data = train) 
+
+
+lasso_predictions <- lasso_models %>% 
   map(predict, newdata = validation, type = "response") %>% 
   map_dbl(function(x) {
     mean(if_else(x >= 0.5, "Yes", "No") != validation$return)
@@ -1301,7 +1327,7 @@ lasso_best <- logistic_formulas2 %>%
   ) 
 
 
-lasso_best %>% 
+lasso_predictions %>% 
   enframe() %>% 
   own_table()
 
@@ -1317,45 +1343,106 @@ The two logistic regression models were comparable in terms of validation classi
 
 
 ```{r}
-# Extract obtained interactions to a formula like vector
-interactions_formula <- interactions2 %>% 
+# Extract obtained interactions to a vector
+interactions_vector <- interactions2 %>% 
  pull(variable) %>% 
- str_replace(":return", "") 
- 
+ str_replace(":return", "")
+```
 
-int_formula <-  str_c(
-  logistic_formulas2[[1]],
-  " + ",
-  str_c(interactions_formula, collapse = " + ")
+
+```{r}
+# Assign model outside the list
+lasso_1seFit <- glm(return ~ gender + age + race + ethnicity + financial_class + ed_result + acuity_arr + admit_result + consult_order + risk + severity + charges + hour_cat + weekday_cat + month_cat, data = train, family = "binomial")
+
+interaction_models <- list()
+
+# Add interactions to the model
+for (i in seq_along(interactions_vector)) {
+  lasso_1seFit <- update(lasso_1seFit, str_c(". ~ . + ", interactions_vector[[i]]))
+  interaction_models[[i]] <- lasso_1seFit
+}
+```
+
+
+```{r}
+
+# Set up all models in a data.frame
+interaction_df <- tibble(
+  model = interaction_models,
+  interactions = seq_along(interactions_vector)
+)
+
+
+# Obtain predictions and miss classification error rate
+interaction_df2 <- interaction_df %>% 
+  mutate(
+    predictions = map(model, predict, newdata = validation, type = "response"),
+    error = map_dbl(predictions, class_error, y = validation$return)
   ) %>% 
-  as.formula()
-
- 
+  arrange(error)
 
 
-train %>% 
- count(return) 
-
-# Set the starting model
-step_full <- glm(int_formula, data = train, family = "binomial")
-
-# Set the null model
-step_null <- glm(return ~ 1, data = train, family = "binomial")
 
 
-# Build the step model
-# fit_step <- step(step_full, c(upper = step_full, lower = step_null), direction = "backward")
+```
+
+
+
+```{r}
+# All important interactions
+# int_formula <-  str_c(
+#   logistic_formulas2[[1]],
+#   " + ",
+#   str_c(interactions_formula, collapse = " + ")
+#   ) %>% 
+#   as.formula()
 ```
 
 
 ```{r}
 
 
-step_predicted <- predict(step_full, newdata = validation, type = "response") %>% 
-  {if_else(. >= 0.5, "Yes", "No")}  
-  
 
-step_miss <- mean(validation$return != step_predicted)
+```
+
+
+
+
+```{r}
+# train %>% 
+#  count(return) 
+
+# Set the starting model
+#step_full <- glm(int_formula, data = train, family = "binomial")
+
+# Set the null model
+#step_null <- glm(return ~ 1, data = train, family = "binomial")
+```
+
+
+```{r}
+
+# step_model <- stepAIC(step_full, direction = "backward", trace = F)
+```
+
+
+```{r}
+# Build the stepwise model
+# fit_step <- step(step_null, c(upper = step_full, lower = step_null), direction = "forward")
+```
+
+
+```{r}
+
+# full_predicted <- predict(step_full, newdata = validation, type = "response") %>% 
+#   {if_else(. >= 0.5, "Yes", "No")}  
+# 
+# step_predicted <- predict(step_model, newdata = validation, type = "response") %>% 
+#   {if_else(. >= 0.5, "Yes", "No")}  
+#   
+# 
+# full_miss <- mean(validation$return != full_predicted)
+# step_miss <- mean(validation$return != step_predicted)
 
 
 
@@ -1363,7 +1450,9 @@ step_miss <- mean(validation$return != step_predicted)
 ```
 
 
-
+Może porównać jeszcze na własną rękę kilka wariantów interaction?
+Np. tylko z pierwszymi paroma interakcjami
+i np. tylko względem lasso regression
 
 
 
