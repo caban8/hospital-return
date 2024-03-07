@@ -280,7 +280,7 @@ healthcare %>%
   ) %>% 
   filter(is.na(charges2)) %>% 
   select(charges, charges2) %>% 
-  own_table()
+  datatable()
 ```
 
 A small portion of the observations for that variable has uninterpretable values. Nothing to worry about.
@@ -490,7 +490,9 @@ healthcare2 %>%
 
 ```
 
-Except what was already learned while inspecting variables with missing values, we can see an equal distribution of gender and the hospital from which the data comes. Interestingly, there is a reversed distribution of diagnosis to return. Theoretically, it would make sense for the diagnosis to be a strong predictor of return, as knowing the nature of the disease would allow for proper and quicker treatment leading to a resolution. 
+Besides what was already learned while inspecting variables with missing values, we can see equal distributions of categories in gender and the hospital where the patient was admitted. 
+Interestingly, the frequency of those who were diagnosed is similar to the frequency of those who did not return. 
+Theoretically, it would make sense for the diagnosis to be a strong predictor of return, as knowing the nature of the disease would allow for proper and quicker treatment, leading to resolution. 
 
 
 
@@ -704,7 +706,7 @@ healthcare3 <- healthcare2 %>%
 ```
 
 
-Let's see what is the distribution of returns depending on the date-time points.
+Let's examine the distribution of returns based on date-time points.
 
 ```{r}
 
@@ -773,6 +775,8 @@ healthcare3 <- healthcare3 %>%
 
 ## Interaction effects
 
+Before testing specific models, we can inspect the effects of the 2-way interactions  predictors on return.
+
 
 ```{r}
 # Create list with all combinations of categorical variables
@@ -818,7 +822,6 @@ datatable(interactions2)
 
 Assuming *p* = 0.001 as the cut-off point, there were `r nrow(interactions2)` significant interaction effects. Statistical significance, of course, on its own, should be treated with caution, especially when dealing with large samples. In order to inspect deeper the effects of the interactions, we could obtain Cramer's V and, for 2x2 relationships, odds ratios, separately on the levels of the third variable. 
 
-**Dodać odds ratio confidence interval**
 
 
 
@@ -906,7 +909,7 @@ Overall, being discharged to a destination other than home or self care was asso
 healthcare3 %>% 
   ggplot() +
   geom_mosaic(aes(x = product(consult_order, return, dc_result), fill = return)) +
-  theme(axis.text.x = element_text(angle = 90))
+  theme(axis.text.x = element_text(angle = 45))
 ```
 
 Even bigger differences between effects were observed when discharge result was moderated by consultation. Even though lack of consultation was generally associated with more returns, the results were noticeably more pronounced for those patients who were discharged to other types of care.
@@ -917,27 +920,23 @@ Even bigger differences between effects were observed when discharge result was 
 
 
 
-```{r fig.asp=2}
+```{r fig.asp=1.5}
 healthcare3 %>% 
   ggplot() +
   geom_mosaic(aes(x = product(diagnosis, return, gender), fill = return))
-
-
-healthcare3 %>% 
-  ggplot() +
-  geom_mosaic(aes(x = product(diagnosis, return, severity), fill = return)) +
-  coord_flip()
-
-
 ```
+
+
+
+Having diagnosis differentiated more among men, where it was a stronger predictor of not returning. 
 
 
 # Model building
 
+  
 
 
-
-```{r}
+```{r }
 
 # Exclude unnecessary or repeated variables
 healthcare_final <- healthcare3 %>% 
@@ -987,7 +986,7 @@ The misclassification error for the null model is `r base_train`%.
 
 
 
-## Tree model
+## Tree models
 
 Let's start with a basic tree model.
 
@@ -999,8 +998,11 @@ fit_tree <- rpart(return ~ ., data = train)
 
 
 
-summary(fit_tree)
 rpart.plot(fit_tree)
+```
+
+
+```{r}
 rpart::printcp(fit_tree)
 ```
 
@@ -1010,7 +1012,9 @@ fit_tree$cptable %>%
   as_tibble() %>% 
   mutate(
     cs_error = xerror * xstd
-  )
+  ) %>% 
+  own_table()
+  
 
 
 
@@ -1019,23 +1023,25 @@ fit_tree$cptable %>%
 
 
 ```{r}
-
 # Create a function for calculating MSE
-mse <- function(x, data) {
+mse <- function(x, data, type = "response") {
   
   # Predict based on the validation set
   if (class(x) == "ranger") {
     pred <- predict(x, data = data)
     y <- pred$predictions
     } else (
-      y <- predict(x, newdata = data)
+      y <- predict(x, newdata = data, type = type)
     )
   # Calculate the error rate
-  mean(y != validation$return)
+  mean(y != data$return)
   
 }
+```
 
 
+
+```{r}
 # Set a range of cp values
 cps <- seq(0.0001, 0.1, 0.005)
 
@@ -1054,17 +1060,14 @@ df_trees <- cps %>%
 # Compare miss error on the validation set
 df_trees2 <- df_trees %>% 
   mutate(
-    pred_validation = map(fit_train, predict, type = "class", newdata = validation),
-    miss_error = map_dbl(pred_validation, function(x) {
-      mean(x != validation$return)
-    })
-  ) %>% 
-  select(name, value, miss_error) %>% 
-  set_names(c("Model", "Complexity Parameter", "validation classification error")) 
+    miss_error = map_dbl(fit_train, mse, data = validation, type = "class")
+  ) 
 
-best_tree_miss <- min(df_trees2$`validation classification error`)
+best_tree_miss <- min(df_trees2$miss_error)
 
 df_trees2 %>% 
+  select(name, value, miss_error) %>% 
+  set_names(c("Model", "Complexity Parameter", "validation classification error")) 
   datatable()
 
 ```
@@ -1073,43 +1076,14 @@ Models with a complexity parameter between 0.05 and 0.150 resulted in the smalle
 
 Either increasing or decreasing complexity parameter was associated with a larger prediction error. 
 
+Since among the best models there is a model with the same cp as the model obtained before, the tree structure for the best prediction remains unchanged.
 
-```{r}
-
-
-```
 
 
 ### Bagging and Random forest
 
 
-```{r}
-# set.seed(321)
-# 
-# randomForest(return ~ ., data = train, ntree = 1000)
-# 
-# 
-# forests <- tibble(mtry = 8:(ncol(train) - 1)) %>% 
-#   mutate(
-#     model = map(mtry, function(x) {
-#       randomForest(
-#         return ~ ., 
-#         data = train, 
-#         mtry = x,
-#         ntree = 100 # To safe some computing power
-#         )})
-#   )
-
-
-
-```
-
-
-
-#### Ranger package for parallel computing
-
-Porównać przy pomocy funkcji pod względem speed
-Dodać również zabawę z num trees, ale po pomniejszeniu liczby predyktorów poprzez kategoryzację hour, month, weekday
+For bagging and random forests I am gonna using ranger package, as it allows for parallel computing
 
 ```{r}
 
@@ -1128,6 +1102,7 @@ forests <- tibble(mtry = 2:(ncol(train) - 1)) %>%
         )})
   )
 ```
+
 
 
 ```{r}
@@ -1253,19 +1228,11 @@ We now t
 
 fit_lasso <- glmnet(X_train, Y_train, family = "binomial")
 
-plot(fit_lasso)
-```
 
-
-```{r}
-fit_lasso %>% 
-  tidy() %>% 
-  ggplot(aes(lambda, estimate, color = term)) +
-  geom_line() +
-  theme(legend.position = "none")
-
+plot(fit_lasso, xvar = "lambda", label = TRUE)
 
 ```
+
 
 
 ```{r}
