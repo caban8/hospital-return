@@ -959,6 +959,9 @@ Y_train <- as.double(train$return) - 1
 X_validation <- model.matrix(return ~ ., data = validation)[,-1]
 Y_validation <- as.double(validation$return) - 1
 
+X_test <- model.matrix(return ~ ., data = test)[,-1]
+Y_test <- as.double(test$return) - 1
+
 
 ```
 
@@ -1023,18 +1026,31 @@ fit_tree$cptable %>%
 
 
 ```{r}
-# Create a function for calculating MSE
-mse <- function(x, data, type = "response") {
+# Create a function for calculating the classification error rate
+mse <- function(x, data, type = "response", outcome = NULL) {
   
-  # Predict based on the validation set
+  # Calculate predictions based on the model type
   if (class(x) == "ranger") {
+    
     pred <- predict(x, data = data)
     y <- pred$predictions
-    } else (
+    
+    } else {
+      
       y <- predict(x, newdata = data, type = type)
-    )
+      
+    }
+  
   # Calculate the error rate
-  mean(y != data$return)
+  # If xgb.booster model, obtain class based on the probability
+  if (class(x) == "xgb.Booster") {
+    y <- if_else(y >= 0.5, 1, 0)
+    error <- mean(y != outcome) 
+    } else {
+    error <- mean(y != data$return)
+    }
+  
+  return(round(error, 3))
   
 }
 ```
@@ -1063,11 +1079,20 @@ df_trees2 <- df_trees %>%
     miss_error = map_dbl(fit_train, mse, data = validation, type = "class")
   ) 
 
+# Extract the miss error rate for the best of the tree models
 best_tree_miss <- min(df_trees2$miss_error)
 
+# Extract the best of the tree models
+best_tree_mod <- df_trees2 %>% 
+  arrange(miss_error) %>% 
+  slice(1) %>% 
+  pull(fit_train) %>% 
+  {.[[1]]}
+
+# Compare tree models in terms of miss error
 df_trees2 %>% 
   select(name, value, miss_error) %>% 
-  set_names(c("Model", "Complexity Parameter", "validation classification error")) 
+  set_names(c("Model", "Complexity Parameter", "validation classification error")) %>% 
   datatable()
 
 ```
@@ -1120,7 +1145,7 @@ forests <- forests %>%
 
 ```
 
-The best random forest model was achieved using m = `r forests$mtry[[1]]`.
+The best random forest model was achieved using an m = `r forests$mtry[[1]]` number of variables to split across all nodes.
 
 
 ```{r}
@@ -1132,7 +1157,15 @@ importance(forests$model[[1]]) %>%
 
 ```
 
-#### Boosting
+Charges and age were most predictive of whether one would return to the hospital. 
+
+Interestingly, these were followed by hospital which, given the lack of differences in the initial bivariate analysis, implies noticeable variability in how other variables are distributed across hospitals.
+In turn, this suggests that hospitals may adopt distinct approaches to evaluating admissions, potentially affecting patient treatment efficacy and their subsequent return.
+
+Financial class and hour of the day reported a similar level of importance in predicting return to the hospital.
+
+
+### Boosting
 
 
 ```{r}
@@ -1170,14 +1203,13 @@ xgboost_models <- params_grid %>%
 ```
 
 
+
+
 ```{r}
-# Predict
+# Obtain predictions for the validation dataset
 xgboost_models2 <- xgboost_models %>% 
   mutate(
-    predictions = map(model, predict, newdata = X_validation),
-    class = map(predictions, function(x) {if_else(x > 0.5, 1, 0)}),
-    miss_error = map_dbl(class, function(x) {mean(x != Y_validation)}),
-    miss_error = round(miss_error, 3)
+    miss_error = map_dbl(model, mse, data = X_validation, outcome = Y_validation)
     ) %>% 
   arrange(miss_error) %>% 
   select(!where(is.list)) 
@@ -1208,9 +1240,9 @@ xgb.importance(model = xgboost_models$model[[1]]) %>%
 
 ```
 
-Analyzing the importance of the predictors for the model with the smallest validation classification error, age and charges were observed to have the highest contribution to the prediction.
+Analyzing the importance of the predictors for the model with the smallest validation classification error, age and charges were observed to have the highest contribution to the prediction, which was similar to the best random forest model, although with the order of the two switched. 
 
-Of significant importance were also gender and ed result.
+In contrast to random forest, the above were followed by gender and ed result.
 
 
 
@@ -1429,8 +1461,25 @@ i np. tylko względem lasso regression
 
 ```{r}
 
-# best_tree_miss
-# step_miss
+best_df <- tibble(
+  models = list(
+    basic_tree = best_tree_mod,  
+    random_forest = forests$model[[1]],  
+    boosted_tree = xgboost_models$model[[1]]
+    ),
+  data = list(
+    test, test, X_test
+  ),
+  type = c("class", "response", "response"),
+  outcome = list(NULL, NULL, Y_test)
+  )
+
+
+best_df %>% 
+  mutate(
+    error = pmap_dbl(list(models, data, type, outcome), mse)
+  )
+
 
 ```
 
