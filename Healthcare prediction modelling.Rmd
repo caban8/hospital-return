@@ -1023,7 +1023,7 @@ fit_tree$cptable %>%
 
 ```
 
-
+#### MSE function
 
 ```{r}
 # Create a function for calculating the classification error rate
@@ -1051,6 +1051,37 @@ mse <- function(x, data, type = "response", outcome = NULL) {
     }
   
   return(round(error, 3))
+  
+}
+
+mse <- function(x, data, type = "response", outcome = NULL) {
+  
+  # Extract model type
+  mod_type <- class(x)[1]
+  
+  # Calculate predictions based on the model type
+  if (mod_type == "ranger") {
+    
+    pred <- predict(x, data = data)
+    y <- pred$predictions
+    
+  } else {y <- predict(x, newdata = data, type = type)}
+  
+  
+  # Classify if the predictions result in probabilities
+  if (mod_type %in% c("glm", "xgb.Booster")) {y <- if_else(y >= 0.5, 1, 0)}
+  
+  
+  # Calculate the error rate
+  # If xgb.booster model, obtain class based on the probability
+  if (mod_type %in% c("glm", "xgb.Booster")) {
+    error <- mean(y != outcome) 
+    } else {
+    error <- mean(y != data$return)
+    }
+  
+  return(round(error, 3))
+  # return(y)
   
 }
 ```
@@ -1313,14 +1344,11 @@ logistic_formulas2 <- logistic_formulas %>%
 # Compare models in terms of validation MSE
 lasso_models <- logistic_formulas2 %>% 
   map(as.formula) %>% 
-  map(glm, family = binomial, data = train) 
+  map(glm, family = binomial, data = train) %>% 
+  set_names(c("coefs_1se", "coefs_min"))
 
-
-lasso_predictions <- lasso_models %>% 
-  map(predict, newdata = validation, type = "response") %>% 
-  map_dbl(function(x) {
-    mean(if_else(x >= 0.5, "Yes", "No") != validation$return)
-  }) %>% 
+lasso_models %>% 
+  map(mse, data = validation, outcome = Y_validation) %>% 
   set_names(
     str_c("Model with ", c(length(coefs_1se), length(coefs_min)), " predicotrs")
   ) 
@@ -1376,7 +1404,8 @@ interaction_df <- tibble(
 interaction_df2 <- interaction_df %>% 
   mutate(
     predictions = map(model, predict, newdata = validation, type = "response"),
-    error = map_dbl(predictions, class_error, y = validation$return)
+    error = map_dbl(predictions, class_error, y = validation$return),
+    error2 = map_dbl(model, mse, data = validation, outcome = Y_validation)
   ) %>% 
   arrange(error)
 
@@ -1384,74 +1413,6 @@ interaction_df2 <- interaction_df %>%
 
 
 ```
-
-
-
-```{r}
-# All important interactions
-# int_formula <-  str_c(
-#   logistic_formulas2[[1]],
-#   " + ",
-#   str_c(interactions_formula, collapse = " + ")
-#   ) %>% 
-#   as.formula()
-```
-
-
-```{r}
-
-
-
-```
-
-
-
-
-```{r}
-# train %>% 
-#  count(return) 
-
-# Set the starting model
-#step_full <- glm(int_formula, data = train, family = "binomial")
-
-# Set the null model
-#step_null <- glm(return ~ 1, data = train, family = "binomial")
-```
-
-
-```{r}
-
-# step_model <- stepAIC(step_full, direction = "backward", trace = F)
-```
-
-
-```{r}
-# Build the stepwise model
-# fit_step <- step(step_null, c(upper = step_full, lower = step_null), direction = "forward")
-```
-
-
-```{r}
-
-# full_predicted <- predict(step_full, newdata = validation, type = "response") %>% 
-#   {if_else(. >= 0.5, "Yes", "No")}  
-# 
-# step_predicted <- predict(step_model, newdata = validation, type = "response") %>% 
-#   {if_else(. >= 0.5, "Yes", "No")}  
-#   
-# 
-# full_miss <- mean(validation$return != full_predicted)
-# step_miss <- mean(validation$return != step_predicted)
-
-
-
-
-```
-
-
-Może porównać jeszcze na własną rękę kilka wariantów interaction?
-Np. tylko z pierwszymi paroma interakcjami
-i np. tylko względem lasso regression
 
 
 
@@ -1465,23 +1426,35 @@ best_df <- tibble(
   models = list(
     basic_tree = best_tree_mod,  
     random_forest = forests$model[[1]],  
-    boosted_tree = xgboost_models$model[[1]]
+    boosted_tree = xgboost_models$model[[1]],
+    log_coefs_1se = lasso_models$coefs_1se,
+    log_coefs_min = lasso_models$coefs_min,
+    log_interactions = interaction_df2$model[[1]]
     ),
   data = list(
-    test, test, X_test
+    test, test, X_test, test, test, test
   ),
-  type = c("class", "response", "response"),
-  outcome = list(NULL, NULL, Y_test)
-  )
+  type = c("class", "response", "response", "response", "response", "response"),
+  outcome = list(NULL, NULL, Y_test, Y_test, Y_test, Y_test)
+  ) 
 
 
 best_df %>% 
   mutate(
+    model = names(models),
     error = pmap_dbl(list(models, data, type, outcome), mse)
-  )
+  ) %>% 
+  select(model, error) %>% 
+  arrange(error) %>% 
+  datatable()
 
 
 ```
+
+
+The gradient-boosted tree and random forest models resulted in the smallest classification error rate. Therefore, if what is aimed at is mere prediction, they should be preferred over logistic models. 
+
+
 
 
 
