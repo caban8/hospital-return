@@ -1,5 +1,5 @@
 ---
-title: "Theming with bslib and thematic"
+title: "Likelihood of Being Readmitted to Hospital - Exploration and Prediction Modeling"
 output: 
   html_document:
     code_folding: hide
@@ -34,18 +34,19 @@ healthcare <- read_csv("Hospitals_Train.csv")
 
 # Introduction 
 
-This is my attempt at selecting the best classification model out of logistic regression and decision tree options for the healthcare prediction data that was analyzed by [`ALIA107`](https://www.kaggle.com/code/bvc5283/healthcare-prediction/notebook). 
-The data was downloaded from here: https://github.com/HannahHan3/758T_PredictiveModeling
+This analysis attempts to identify the factors behind the likelihood of a patient's readmission to the hospital within 30 days. 
+It employs a combination of exploratory analyses, theoretical thinking, and statistical modelling through logistic regression and decision tree models. This approach builds upon the analysis previously carried by
+[`ALIA107`](https://www.kaggle.com/code/bvc5283/healthcare-prediction/notebook). 
+The dataset was obtained from https://github.com/HannahHan3/758T_PredictiveModeling
 
-I will by guided by the following aims:
+Guided by the following objectives, I aimed:
 
--   to refine the code
--   to employ a more detailed EDA
--   to look for possible interaction effects
+-   To refine the code for increased efficiency,
+-   To conduct a more detailed exploratory data analysis (EDA),
+-   To identify possible interaction effects that could impact the model's predictions,
+-   To compare models in terms of classification error rate.
 
-The goal is to predict whether a discharged patient returns to the hospital within 30 days.
-
-
+More emphasis was put on the *interpretability* aspect than *prediction*.
 
 
 # Infrastructure
@@ -1347,7 +1348,7 @@ lasso_models <- logistic_formulas2 %>%
   map(glm, family = binomial, data = train) %>% 
   set_names(c("coefs_1se", "coefs_min"))
 
-lasso_models %>% 
+lasso_predictions <- lasso_models %>% 
   map(mse, data = validation, outcome = Y_validation) %>% 
   set_names(
     str_c("Model with ", c(length(coefs_1se), length(coefs_min)), " predicotrs")
@@ -1439,44 +1440,30 @@ best_df <- tibble(
   ) 
 
 
-best_df %>% 
+best_df <- best_df %>% 
   mutate(
     model = names(models),
-    error = pmap_dbl(list(models, data, type, outcome), mse)
+    error = pmap_dbl(list(models, data, type, outcome), mse),
+    accuracy = (1 - error) * 100,
+    accuracy = round(accuracy, 1)
   ) %>% 
-  select(model, error) %>% 
-  arrange(error) %>% 
-  datatable()
+  select(model, error, accuracy) %>% 
+  arrange(error)
+
+best_df %>% 
+  datatable() 
 
 
 ```
 
 
-The gradient-boosted tree and random forest models resulted in the smallest classification error rate. Therefore, if what is aimed at is mere prediction, they should be preferred over logistic models. 
+The gradient-boosted tree and random forest models achieved the highest classification accuracies, 
+with `r best_df$accuracy[[1]]`% and `r best_df$accuracy[[2]]`% accuracies respectively.
+Therefore, for objectives focused solely on prediction, they should be preferred over logistic regression models. 
+However, a deeper theoretical analysis of interactions could yield a better overall understanding of the factors affecting a patient's return to the hospital.
+This, in turn, could motivate more targeted research aimed at addressing specific questions. For example, examining the differences in diagnoses between patients discharged to home versus those discharged to other types of care could elucidate why a diagnosis in the latter group reduces the likelihood of return.
 
 
 
 
-
-
-
-
-
-# Tasks for now
-
-**Crucial questions at this moment of the analysis**
-
-1.    What exactly is the main goal here?
-    -   Is pure prediction more important?
-    -   Or, is interpretability more important?
-2.    In other words, should we aim for fitting the best possible model or finding specific relationships between predictors and the DV, including potential interaction effects?
-
-
-https://ww2.coastal.edu/kingw/statistics/R-tutorials/loglin.html
-
-
-
-# End notes
-
-**Perhaps next time try to first create several versions of the original datasets which will differ in the way certain variables are recoded.**
 
